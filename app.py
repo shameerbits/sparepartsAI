@@ -1,10 +1,10 @@
 import os
 import streamlit as st
 import pandas as pd
-import openai
+from openai import OpenAI
 
-# Set OpenAI API key from environment variable
-openai.api_key = os.environ.get("OPENAI_API_KEY")
+# Initialize OpenAI client with API key from environment variable
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 st.title("AI Spare Parts Sales Assistant")
 
