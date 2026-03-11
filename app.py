@@ -80,7 +80,7 @@ Return structured response useful for a spare parts salesman.
 """
         try:
             with st.spinner("Contacting AI..."):
-                response = openai.ChatCompletion.create(
+                response = client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=500,
