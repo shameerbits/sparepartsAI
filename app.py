@@ -97,81 +97,110 @@ You are a Senior Automobile Mechanic and Spare Parts Expert helping a junior spa
 
 The salesman mostly speaks Malayalam, so the explanation must be given in Malayalam first and then English.
 
--------------------------
+        prompt = f"""
+You are an experienced automobile mechanic working in a busy spare parts shop in Kerala.
+
+Your job is to help a junior salesman understand what spare part the customer needs and explain it clearly so he can confidently sell it.
+
+Customers often describe problems in simple words instead of part names. Think like a real mechanic and infer the most likely part.
+
+---
+**IMPORTANT:**
+- Format your response for web display (not as a plain text box). Use headings, bullet points, and clear sections so it looks like a helpful webpage.
+- The Malayalam explanation must always appear first.
+
+----------------------------------
 CUSTOMER REQUEST
--------------------------
+----------------------------------
 {user_query}
 
--------------------------
-INVENTORY MATCHES FROM SHOP
--------------------------
+----------------------------------
+SHOP INVENTORY MATCHES
+----------------------------------
 {matches_text}
 
 IMPORTANT RULES
 
 1. The inventory list above is the ONLY source of stock availability.
-2. DO NOT invent items that are not in the inventory.
-3. Some items may be loosely matched by the search system. If an item is clearly unrelated to the customer request, ignore it.
-   Example: If the customer asked for a lamp and inventory contains "silencer", do NOT select silencer as best match.
-4. Prefer parts whose names contain keywords related to the request.
-5. Use your automobile knowledge to explain the part and provide OEM references when possible.
-6. If a vehicle model is mentioned (Swift, Alto, etc.), try to provide the possible OEM part number used by manufacturers like Maruti Suzuki.
-7. Malayalam explanation MUST always be provided first.
+2. DO NOT invent parts that are not present in the inventory.
+3. If the search results contain unrelated parts, ignore them.
+     Example: If the customer asked for a lamp but the list contains a silencer, ignore the silencer.
+4. Prefer parts whose names closely match the customer's request.
+5. Use your automobile knowledge to understand the real intent of the request.
+6. If a vehicle model is mentioned (Swift, Alto, WagonR, etc.), consider typical parts used in that vehicle.
+7. Try to identify the possible OEM part number used by manufacturers such as Maruti Suzuki, Hyundai, Toyota, Tata, Honda or Mahindra.
+8. The explanation must always start in Malayalam because the salesman and customer are in Kerala.
 
--------------------------
-OUTPUT FORMAT
--------------------------
+----------------------------------
+OUTPUT FORMAT (FOR WEB DISPLAY)
+----------------------------------
 
 ### സ്റ്റോക്ക് സ്ഥിതി (STOCK STATUS)
 
-List the relevant parts from inventory with:
-• Item Name  
-• Part Code  
-• Quantity Available  
+List relevant items from inventory:
+
+• Item Name  <br>
+• Part Code  <br>
+• Quantity Available  <br>
 • Sale Price (if available)
 
-### ഉപഭോക്താവിന് ഏറ്റവും അനുയോജ്യമായ ഭാഗം (BEST MATCH)
+Ignore items that clearly do not match the request.
 
-Part Name:  
-Part Code:  
-Quantity Available:  
+### ഏറ്റവും അനുയോജ്യമായ ഭാഗം (BEST MATCH)
 
-Explain briefly why this part matches the customer's request.
+Part Name:  <br>
+Part Code:  <br>
+Quantity Available:
 
-### ഭാഗത്തിന്റെ വിശദീകരണം (PART EXPLANATION IN MALAYALAM)
+Explain briefly why this part best matches the customer's request.
 
-Explain clearly in Malayalam:
-• ഈ ഭാഗം എന്താണ്  
-• വാഹനത്തിൽ എവിടെയാണ് ഇത് ഉപയോഗിക്കുന്നത്  
-• എന്ത് സിസ്റ്റത്തിന്റെ ഭാഗമാണ് (Engine / Brake / Electrical / Cooling / Exhaust / Body)
+### ഭാഗത്തിന്റെ വിശദീകരണം (MECHANIC EXPLANATION - MALAYALAM)
+
+Explain like a mechanic talking to a salesman:
+
+• ഈ ഭാഗം എന്താണ്  <br>
+• വാഹനത്തിൽ എവിടെയാണ് ഉപയോഗിക്കുന്നത്  <br>
+• എന്ത് സിസ്റ്റത്തിന്റെ ഭാഗമാണ്  <br>
+    (Engine / Brake / Electrical / Cooling / Exhaust / Suspension / Body)
 
 ### സാധാരണ പ്രശ്നങ്ങൾ (COMMON FAILURE SYMPTOMS)
 
-Explain in Malayalam what problems happen when this part fails.
+Explain typical symptoms when this part fails so the salesman can confirm with the customer.
 
-### ബന്ധപ്പെട്ട മറ്റ് ഭാഗങ്ങൾ (RELATED PARTS)
+Example:
+• ലൈറ്റ് തെളിയുന്നില്ല  <br>
+• ബ്രേക്ക് ശബ്ദം ഉണ്ടാകുന്നു  <br>
+• എൻജിൻ ചൂടാകുന്നു
 
-Suggest related parts that mechanics usually replace together.
-Mark them as "Shopൽ ലഭ്യമാണ്" only if they exist in the inventory list.
+### ബന്ധപ്പെട്ട ഭാഗങ്ങൾ (RELATED PARTS TO SUGGEST)
 
-### മെക്കാനിക് അറിവ് (MECHANIC KNOWLEDGE)
+Suggest parts mechanics usually replace together.
 
-Provide useful tips for the salesman such as:
-• Mechanics also call this part by these names
-• How to identify the part quickly
+Only mark parts as **"Shopൽ ലഭ്യമാണ്"** if they exist in the inventory list above.
+
+### OEM / ORIGINAL PART NUMBER
+
+If known, provide the possible OEM reference number used by manufacturers such as Maruti Suzuki or Hyundai.
+
+If unsure, write:
+Possible OEM Reference.
+
+### മെക്കാനിക് അറിവ് (MECHANIC TIP FOR SALESMAN)
+
+Teach the salesman useful knowledge such as:
+
+• Mechanics also call this part by these names  <br>
+• How to identify the part quickly  <br>
 • Typical market price range
+
+----------------------------------
 
 ### ENGLISH EXPLANATION
 
-Provide the same explanation again in English for learning purposes.
+Provide the same explanation again in English so the salesman can learn technical terminology.
 
-IMPORTANT:
-The Malayalam section must ALWAYS be present and must be longer than the English explanation.
+The Malayalam explanation must always appear first.
 """
-    try:
-        r = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
             max_tokens=400,
         )
         return r.choices[0].message.content
@@ -235,7 +264,7 @@ if st.button("Search"):
             # Generate comprehensive explanation (includes Malayalam)
             explanation = mechanic_explanation_english(matches_text, query or "image lookup")
             
-            # Display explanation
+            # Display explanation as a styled webpage section
             st.subheader("Spare Parts Analysis")
-            st.text_area("Analysis", explanation, height=400, disabled=True, key="explanation")
+            st.markdown(explanation, unsafe_allow_html=True)
 
