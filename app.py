@@ -64,12 +64,13 @@ def analyze_image(uploaded_file) -> str:
         data_url = f"data:image/{ext};base64,{b64}"
         prompt = (
             "You are an automobile spare parts expert.\n\n"
-            "Identify the spare part in this image.\n"
-            "Return:\n"
+            "Identify the spare part shown in this image.\n"
+            "Provide:\n"
             "* Part name\n"
-            "* Category\n"
-            "* Possible vehicle systems\n"
-            "* Common keywords used to search this part.\n"
+            "* What it does in the vehicle\n"
+            "* Relevant vehicle system (Engine, Brake, Suspension, Electrical, Cooling, Exhaust, Body)\n"
+            "* Keywords to search for this part\n\n"
+            "Be concise and practical for spare parts shop use.\n"
         )
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -92,93 +93,102 @@ def analyze_image(uploaded_file) -> str:
 
 def mechanic_explanation_english(matches_text: str, user_query: str) -> str:
     prompt = f"""
-You are a Senior Automobile Mechanic and Parts Consultant helping a spare parts shop salesman.
+You are a Senior Automobile Mechanic and Spare Parts Expert helping a junior spare parts shop salesman.
 
-Your job is to translate the customer's vague request into the correct spare part and explain it clearly so the salesman can confidently sell it.
+Your job is to understand the customer's request and explain the most relevant spare part from the shop inventory.
 
-Use the inventory matches below as the PRIMARY source of truth for stock availability.
+The salesman is still learning about automobile parts, so provide helpful explanations.
 
-Inventory Matches From Shop:
-{matches_text}
-
-Customer Query:
+-------------------------
+CUSTOMER REQUEST
+-------------------------
 {user_query}
 
+-------------------------
+INVENTORY MATCHES FROM SHOP
+-------------------------
+{matches_text}
 
 IMPORTANT RULES
 
-1. ONLY mark parts as "In Stock" if they appear in the inventory list above.
-2. DO NOT invent stock items.
-3. You MAY use general automobile knowledge to explain the part, vehicle system, symptoms, OEM part numbers, and market information.
-4. If the vehicle model is mentioned, try to identify the ORIGINAL OEM PART NUMBER used by manufacturers like:
+1. The inventory list above is the ONLY source of stock availability.
+2. DO NOT invent items that are not in the inventory.
+3. Some items may be loosely matched by the search system. If an item is clearly unrelated to the customer request, ignore it.
+   Example: If the customer asked for a "lamp" and inventory contains "silencer", do NOT select silencer as best match.
+4. Prefer parts whose names contain keywords related to the request.
+5. Use your automotive knowledge to explain the part and provide OEM references when possible.
+6. If the vehicle model is mentioned (Swift, Alto, etc.), try to provide the possible OEM part number used by manufacturers such as:
    - Maruti Suzuki
    - Hyundai
    - Toyota
    - Honda
    - Tata
    - Mahindra
-5. If OEM part number is uncertain, say "Possible OEM Reference".
-6. Keep explanation simple so a salesman with little mechanical knowledge can understand.
+7. If OEM number is uncertain, write: "Possible OEM Reference".
 
-
+-------------------------
 OUTPUT FORMAT
-
+-------------------------
 
 STOCK STATUS
-List each matched item with:
+List all relevant items from the inventory with:
 • Item Name
 • Part Code
 • Quantity Available
 • Sale Price (if available)
 
-
 BEST MATCH FOR CUSTOMER
 Part Name:
 Part Code:
-Available Quantity:
-Why this is the best match:
+Quantity Available:
 
+Reason why this is the best match.
 
 OEM / ORIGINAL PART NUMBER
-Provide OEM part number if known (especially for Maruti Suzuki or common Indian cars).
+Provide OEM reference if known (especially for Maruti Suzuki vehicles).
 
-
-PART EXPLANATION
-Explain in simple words:
-• What the part does
+PART EXPLANATION (ENGLISH)
+Explain clearly:
+• What this part does
 • Where it is located in the vehicle
 • Which vehicle system it belongs to
-  (Engine / Brake / Suspension / Electrical / Cooling / Transmission)
+  (Engine / Brake / Suspension / Electrical / Cooling / Exhaust / Body)
 
-
-COMMON SYMPTOMS OF FAILURE
-Explain what happens when this part fails so salesman can ask the customer.
-
+COMMON FAILURE SYMPTOMS
+Explain symptoms when this part fails so the salesman can ask the customer.
 
 RELATED PARTS TO SUGGEST
-Suggest related parts commonly replaced together
-BUT only mark them as "Available" if they exist in the inventory above.
-
+Suggest parts commonly replaced together.
+Mark them as "Available in Shop" ONLY if they exist in the inventory list above.
 
 MARKET KNOWLEDGE
-Provide helpful information such as:
+Provide helpful mechanic knowledge such as:
 • Typical market price range
-• OEM vs aftermarket difference
-• Which brands mechanics prefer
-
+• OEM vs aftermarket differences
+• Popular brands mechanics prefer
 
 SALESMAN LEARNING TIP
-Teach the salesman something useful such as:
-• Alternative names mechanics use for this part
-• Quick way to identify the part
-• Common customer language for this part
+Teach the salesman useful knowledge such as:
+• Other names mechanics use for this part
+• How to visually identify it
+• Common customer words for this part
 
+-------------------------
+MALAYALAM EXPLANATION (MANDATORY)
+-------------------------
 
-MALAYALAM QUICK EXPLANATION
 Provide a short explanation in Malayalam so the salesman can easily explain to local customers.
 
+The Malayalam explanation must include:
+• What the part is
+• What it does in the vehicle
 
-Keep the answer structured, clear, and practical for a spare parts shop.
+Use simple spoken Malayalam used in Kerala spare parts shops.
+
+Example style:
+"ഇത് കാർ ഹെഡ് ലൈറ്റ് ബൾബ് ആണ്. രാത്രിയിൽ ലൈറ്റ് നൽകാൻ ഉപയോഗിക്കുന്ന ഭാഗമാണ്."
+
+The Malayalam explanation MUST always be provided.
 """
     try:
         r = client.chat.completions.create(
@@ -191,28 +201,7 @@ Keep the answer structured, clear, and practical for a spare parts shop.
         return f"(error generating explanation: {e})"
 
 
-def mechanic_explanation_malayalam(english_explanation: str, matches_text: str) -> str:
-    prompt = f"""
-Translate and explain the following mechanic explanation to Malayalam.
-Maintain accuracy and clarity. Translate ONLY, do not add new information.
 
-Original English explanation:
-{english_explanation}
-
-Inventory data (for reference):
-{matches_text}
-
-Provide the Malayalam translation clearly.
-"""
-    try:
-        r = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
-        )
-        return r.choices[0].message.content
-    except Exception as e:
-        return f"(error translating to Malayalam: {e})"
 
 # --- Streamlit UI -----------------------------------------------------------
 @st.cache_data(show_spinner=False)
@@ -265,15 +254,10 @@ if st.button("Search"):
             st.dataframe(display_df)
             matches_text = rows_to_text(matches)
             
-            # Generate English explanation first (accurate)
-            english_exp = mechanic_explanation_english(matches_text, query or "image lookup")
+            # Generate comprehensive explanation (includes Malayalam)
+            explanation = mechanic_explanation_english(matches_text, query or "image lookup")
             
-            # Translate to Malayalam
-            malayalam_exp = mechanic_explanation_malayalam(english_exp, matches_text)
-            
-            # Display one above the other with reasonable size
-            st.subheader("English Explanation")
-            st.text_area("English", english_exp, height=200, disabled=True, key="eng_exp")
-            st.subheader("Malayalam വിവരണം")
-            st.text_area("Malayalam", malayalam_exp, height=200, disabled=True, key="mal_exp")
+            # Display explanation
+            st.subheader("Spare Parts Analysis")
+            st.text_area("Analysis", explanation, height=400, disabled=True, key="explanation")
 
