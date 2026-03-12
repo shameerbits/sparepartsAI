@@ -93,11 +93,6 @@ def analyze_image(uploaded_file) -> str:
 
 def mechanic_explanation_english(matches_text: str, user_query: str) -> str:
     prompt = f"""
-You are a Senior Automobile Mechanic and Spare Parts Expert helping a junior spare parts shop salesman in Kerala.
-
-The salesman mostly speaks Malayalam, so the explanation must be given in Malayalam first and then English.
-
-        prompt = f"""
 You are an experienced automobile mechanic working in a busy spare parts shop in Kerala.
 
 Your job is to help a junior salesman understand what spare part the customer needs and explain it clearly so he can confidently sell it.
@@ -124,7 +119,7 @@ IMPORTANT RULES
 1. The inventory list above is the ONLY source of stock availability.
 2. DO NOT invent parts that are not present in the inventory.
 3. If the search results contain unrelated parts, ignore them.
-     Example: If the customer asked for a lamp but the list contains a silencer, ignore the silencer.
+   Example: If the customer asked for a lamp but the list contains a silencer, ignore the silencer.
 4. Prefer parts whose names closely match the customer's request.
 5. Use your automobile knowledge to understand the real intent of the request.
 6. If a vehicle model is mentioned (Swift, Alto, WagonR, etc.), consider typical parts used in that vehicle.
@@ -137,8 +132,7 @@ OUTPUT FORMAT (FOR WEB DISPLAY)
 
 ### സ്റ്റോക്ക് സ്ഥിതി (STOCK STATUS)
 
-List relevant items from inventory:
-
+List relevant items from inventory:<br>
 • Item Name  <br>
 • Part Code  <br>
 • Quantity Available  <br>
@@ -156,39 +150,34 @@ Explain briefly why this part best matches the customer's request.
 
 ### ഭാഗത്തിന്റെ വിശദീകരണം (MECHANIC EXPLANATION - MALAYALAM)
 
-Explain like a mechanic talking to a salesman:
-
+Explain like a mechanic talking to a salesman:<br>
 • ഈ ഭാഗം എന്താണ്  <br>
 • വാഹനത്തിൽ എവിടെയാണ് ഉപയോഗിക്കുന്നത്  <br>
 • എന്ത് സിസ്റ്റത്തിന്റെ ഭാഗമാണ്  <br>
-    (Engine / Brake / Electrical / Cooling / Exhaust / Suspension / Body)
+  (Engine / Brake / Electrical / Cooling / Exhaust / Suspension / Body)
 
 ### സാധാരണ പ്രശ്നങ്ങൾ (COMMON FAILURE SYMPTOMS)
 
-Explain typical symptoms when this part fails so the salesman can confirm with the customer.
-
-Example:
+Explain typical symptoms when this part fails so the salesman can confirm with the customer.<br>
+Example:<br>
 • ലൈറ്റ് തെളിയുന്നില്ല  <br>
 • ബ്രേക്ക് ശബ്ദം ഉണ്ടാകുന്നു  <br>
 • എൻജിൻ ചൂടാകുന്നു
 
 ### ബന്ധപ്പെട്ട ഭാഗങ്ങൾ (RELATED PARTS TO SUGGEST)
 
-Suggest parts mechanics usually replace together.
-
+Suggest parts mechanics usually replace together.<br>
 Only mark parts as **"Shopൽ ലഭ്യമാണ്"** if they exist in the inventory list above.
 
 ### OEM / ORIGINAL PART NUMBER
 
-If known, provide the possible OEM reference number used by manufacturers such as Maruti Suzuki or Hyundai.
-
-If unsure, write:
+If known, provide the possible OEM reference number used by manufacturers such as Maruti Suzuki or Hyundai.<br>
+If unsure, write:<br>
 Possible OEM Reference.
 
 ### മെക്കാനിക് അറിവ് (MECHANIC TIP FOR SALESMAN)
 
-Teach the salesman useful knowledge such as:
-
+Teach the salesman useful knowledge such as:<br>
 • Mechanics also call this part by these names  <br>
 • How to identify the part quickly  <br>
 • Typical market price range
@@ -197,8 +186,7 @@ Teach the salesman useful knowledge such as:
 
 ### ENGLISH EXPLANATION
 
-Provide the same explanation again in English so the salesman can learn technical terminology.
-
+Provide the same explanation again in English so the salesman can learn technical terminology.<br>
 The Malayalam explanation must always appear first.
 """
             max_tokens=400,
