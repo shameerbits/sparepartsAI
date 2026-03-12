@@ -71,57 +71,48 @@ def analyze_image(uploaded_file) -> str:
             "* Possible vehicle systems\n"
             "* Common keywords used to search this part.\n"
         )
-        resp = client.responses.create(
-            model="gpt-4o-mini-vision",
-            input=[
-                {"role": "user", "content": prompt},
-                {"type": "input_image", "image_url": data_url, "detail": "high"},
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
             ],
-            max_output_tokens=500,
+            max_tokens=500,
         )
-        if hasattr(resp, "output_text"):
-            return resp.output_text.strip()
-        # fallback: iterate output items
-        text_parts = []
-        for item in getattr(resp, "output", []):
-            if isinstance(item, dict):
-                content = item.get("content")
-                if isinstance(content, list):
-                    for c in content:
-                        if isinstance(c, dict) and c.get("type") == "output_text":
-                            text_parts.append(c.get("text", ""))
-                elif isinstance(content, str):
-                    text_parts.append(content)
-        return "\n".join(text_parts).strip()
+        return response.choices[0].message.content.strip()
     except Exception as e:
         st.error(f"Image analysis failed: {e}")
         return ""
 
 
-def mechanic_explanation(matches_text: str, user_query: str) -> str:
+def mechanic_explanation_english(matches_text: str, user_query: str) -> str:
     prompt = f"""
 You are a senior automobile mechanic helping a spare parts shop salesman.
 
-Explain the parts in a simple way.
+Based ONLY on the inventory matches provided below, explain the available parts clearly and accurately.
 
 Inventory Matches:
 {matches_text}
 
-Customer Query:
+Customer Query/Need:
 {user_query}
 
-Respond in Malayalam as much as possible.
+Provide a clear, concise explanation:
+1. Stock status (which items are in stock with quantities)
+2. Best matching part for the customer's need
+3. Part code of the best match
+4. Quantity available for best match
+5. What is the part used for in the vehicle
+6. Which vehicle system does it belong to
+7. Any related parts available or recommendations
 
-Explain:
-1. Stock status
-2. Best matching part
-3. Part code
-4. Quantity available
-5. What the part is used for in the vehicle
-6. Which car system it belongs to
-7. Suggest related parts if helpful
-
-Keep explanation short and clear for a salesman.
+Be concise. Only reference parts that are actually in the matches above.
+Do NOT invent or hallucinate information.
 """
     try:
         r = client.chat.completions.create(
@@ -132,6 +123,30 @@ Keep explanation short and clear for a salesman.
         return r.choices[0].message.content
     except Exception as e:
         return f"(error generating explanation: {e})"
+
+
+def mechanic_explanation_malayalam(english_explanation: str, matches_text: str) -> str:
+    prompt = f"""
+Translate and explain the following mechanic explanation to Malayalam.
+Maintain accuracy and clarity. Translate ONLY, do not add new information.
+
+Original English explanation:
+{english_explanation}
+
+Inventory data (for reference):
+{matches_text}
+
+Provide the Malayalam translation clearly.
+"""
+    try:
+        r = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=400,
+        )
+        return r.choices[0].message.content
+    except Exception as e:
+        return f"(error translating to Malayalam: {e})"
 
 # --- Streamlit UI -----------------------------------------------------------
 uploaded_file = st.file_uploader("Upload Excel inventory", type=["xls", "xlsx"])
@@ -168,6 +183,19 @@ if st.button("Search"):
             display_df.columns = ["Item Name", "Part Code", "Category", "Qty"]
             st.dataframe(display_df)
             matches_text = rows_to_text(matches)
-            explanation = mechanic_explanation(matches_text, query or "image lookup")
-            st.text_area("Mechanic Explanation (Malayalam)", explanation, height=300)
+            
+            # Generate English explanation first (accurate)
+            english_exp = mechanic_explanation_english(matches_text, query or "image lookup")
+            
+            # Translate to Malayalam
+            malayalam_exp = mechanic_explanation_malayalam(english_exp, matches_text)
+            
+            # Display side by side
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("English Explanation")
+                st.text_area("English", english_exp, height=300, disabled=True, key="eng_exp")
+            with col2:
+                st.subheader("Malayalam വിവരണം")
+                st.text_area("Malayalam", malayalam_exp, height=300, disabled=True, key="mal_exp")
 
