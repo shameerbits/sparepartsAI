@@ -92,27 +92,93 @@ def analyze_image(uploaded_file) -> str:
 
 def mechanic_explanation_english(matches_text: str, user_query: str) -> str:
     prompt = f"""
-You are a senior automobile mechanic helping a spare parts shop salesman.
+You are a Senior Automobile Mechanic and Parts Consultant helping a spare parts shop salesman.
 
-Based ONLY on the inventory matches provided below, explain the available parts clearly and accurately.
+Your job is to translate the customer's vague request into the correct spare part and explain it clearly so the salesman can confidently sell it.
 
-Inventory Matches:
+Use the inventory matches below as the PRIMARY source of truth for stock availability.
+
+Inventory Matches From Shop:
 {matches_text}
 
-Customer Query/Need:
+Customer Query:
 {user_query}
 
-Provide a clear, concise explanation:
-1. Stock status (which items are in stock with quantities)
-2. Best matching part for the customer's need
-3. Part code of the best match
-4. Quantity available for best match
-5. What is the part used for in the vehicle
-6. Which vehicle system does it belong to
-7. Any related parts available or recommendations
 
-Be concise. Only reference parts that are actually in the matches above.
-Do NOT invent or hallucinate information.
+IMPORTANT RULES
+
+1. ONLY mark parts as "In Stock" if they appear in the inventory list above.
+2. DO NOT invent stock items.
+3. You MAY use general automobile knowledge to explain the part, vehicle system, symptoms, OEM part numbers, and market information.
+4. If the vehicle model is mentioned, try to identify the ORIGINAL OEM PART NUMBER used by manufacturers like:
+   - Maruti Suzuki
+   - Hyundai
+   - Toyota
+   - Honda
+   - Tata
+   - Mahindra
+5. If OEM part number is uncertain, say "Possible OEM Reference".
+6. Keep explanation simple so a salesman with little mechanical knowledge can understand.
+
+
+OUTPUT FORMAT
+
+
+STOCK STATUS
+List each matched item with:
+• Item Name
+• Part Code
+• Quantity Available
+• Sale Price (if available)
+
+
+BEST MATCH FOR CUSTOMER
+Part Name:
+Part Code:
+Available Quantity:
+Why this is the best match:
+
+
+OEM / ORIGINAL PART NUMBER
+Provide OEM part number if known (especially for Maruti Suzuki or common Indian cars).
+
+
+PART EXPLANATION
+Explain in simple words:
+• What the part does
+• Where it is located in the vehicle
+• Which vehicle system it belongs to
+  (Engine / Brake / Suspension / Electrical / Cooling / Transmission)
+
+
+COMMON SYMPTOMS OF FAILURE
+Explain what happens when this part fails so salesman can ask the customer.
+
+
+RELATED PARTS TO SUGGEST
+Suggest related parts commonly replaced together
+BUT only mark them as "Available" if they exist in the inventory above.
+
+
+MARKET KNOWLEDGE
+Provide helpful information such as:
+• Typical market price range
+• OEM vs aftermarket difference
+• Which brands mechanics prefer
+
+
+SALESMAN LEARNING TIP
+Teach the salesman something useful such as:
+• Alternative names mechanics use for this part
+• Quick way to identify the part
+• Common customer language for this part
+
+
+MALAYALAM QUICK EXPLANATION
+Provide a short explanation in Malayalam so the salesman can easily explain to local customers.
+
+
+Keep the answer structured, clear, and practical for a spare parts shop.
 """
     try:
         r = client.chat.completions.create(
@@ -149,13 +215,28 @@ Provide the Malayalam translation clearly.
         return f"(error translating to Malayalam: {e})"
 
 # --- Streamlit UI -----------------------------------------------------------
-uploaded_file = st.file_uploader("Upload Excel inventory", type=["xls", "xlsx"])
+@st.cache_data(show_spinner=False)
+def load_default_inventory():
+    """Load default stock.xlsx from the directory if it exists."""
+    if os.path.exists("stock.xlsx"):
+        return load_inventory("stock.xlsx")
+    return None
+
+# Load default inventory
+default_df = load_default_inventory()
+
+# Optional file upload
+uploaded_file = st.file_uploader("Upload Excel inventory (Optional - replaces default stock)", type=["xls", "xlsx"])
 df = None
+
 if uploaded_file:
     df = load_inventory(uploaded_file)
-    st.success("Inventory loaded.")
+    st.success("✓ Custom inventory loaded.")
+elif default_df is not None:
+    df = default_df
+    st.info("ℹ️  Using default stock.xlsx")
 else:
-    st.info("Please upload inventory to begin.")
+    st.warning("⚠️  No inventory loaded. Please upload a stock file or ensure stock.xlsx exists in the directory.")
 
 query = st.text_input("Enter your search query:")
 image_file = st.file_uploader("Upload spare part image", type=["png", "jpg", "jpeg"])
