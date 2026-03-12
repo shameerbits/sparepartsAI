@@ -188,7 +188,8 @@ Teach the salesman useful knowledge such as:<br>
 
 Provide the same explanation again in English so the salesman can learn technical terminology.<br>
 The Malayalam explanation must always appear first.
-"""
+    """
+    try:
         r = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
