@@ -190,12 +190,9 @@ if st.button("Search"):
             # Translate to Malayalam
             malayalam_exp = mechanic_explanation_malayalam(english_exp, matches_text)
             
-            # Display side by side
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("English Explanation")
-                st.text_area("English", english_exp, height=300, disabled=True, key="eng_exp")
-            with col2:
-                st.subheader("Malayalam വിവരണം")
-                st.text_area("Malayalam", malayalam_exp, height=300, disabled=True, key="mal_exp")
+            # Display one above the other with reasonable size
+            st.subheader("English Explanation")
+            st.text_area("English", english_exp, height=200, disabled=True, key="eng_exp")
+            st.subheader("Malayalam വിവരണം")
+            st.text_area("Malayalam", malayalam_exp, height=200, disabled=True, key="mal_exp")
 
