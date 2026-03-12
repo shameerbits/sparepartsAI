@@ -93,16 +93,10 @@ def analyze_image(uploaded_file) -> str:
 
 def mechanic_explanation_english(matches_text: str, user_query: str) -> str:
     prompt = f"""
-You are an experienced automobile mechanic working in a busy spare parts shop in Kerala.
+You are an experienced automobile mechanic helping a junior spare parts shop salesman.
 
-Your job is to help a junior salesman understand what spare part the customer needs and explain it clearly so he can confidently sell it.
-
-Customers often describe problems in simple words instead of part names. Think like a real mechanic and infer the most likely part.
-
----
-**IMPORTANT:**
-- Format your response for web display (not as a plain text box). Use headings, bullet points, and clear sections so it looks like a helpful webpage.
-- The Malayalam explanation must always appear first.
+Your job is to understand the customer's request and identify the correct spare part from the shop inventory. 
+Explain the part clearly so the salesman can confidently sell it and also learn about automobile parts.
 
 ----------------------------------
 CUSTOMER REQUEST
@@ -118,80 +112,86 @@ IMPORTANT RULES
 
 1. The inventory list above is the ONLY source of stock availability.
 2. DO NOT invent parts that are not present in the inventory.
-3. If the search results contain unrelated parts, ignore them.
-   Example: If the customer asked for a lamp but the list contains a silencer, ignore the silencer.
-4. Prefer parts whose names closely match the customer's request.
-5. Use your automobile knowledge to understand the real intent of the request.
+3. Some search results may be weak matches. Ignore items that are clearly unrelated to the customer request.
+   Example: If the customer asked for a lamp but the inventory contains "silencer", ignore the silencer.
+4. Prefer parts whose names strongly match the customer request.
+5. Think like a real mechanic and infer the most likely part the customer needs.
 6. If a vehicle model is mentioned (Swift, Alto, WagonR, etc.), consider typical parts used in that vehicle.
-7. Try to identify the possible OEM part number used by manufacturers such as Maruti Suzuki, Hyundai, Toyota, Tata, Honda or Mahindra.
-8. The explanation must always start in Malayalam because the salesman and customer are in Kerala.
+7. If possible, provide the original OEM part number used by manufacturers such as:
+   - Maruti Suzuki
+   - Hyundai
+   - Toyota
+   - Honda
+   - Tata
+   - Mahindra
+8. If the OEM number is uncertain, write "Possible OEM Reference".
 
 ----------------------------------
-OUTPUT FORMAT (FOR WEB DISPLAY)
+OUTPUT FORMAT
 ----------------------------------
 
-### സ്റ്റോക്ക് സ്ഥിതി (STOCK STATUS)
+STOCK STATUS
+List relevant parts from the inventory:
 
-List relevant items from inventory:<br>
-• Item Name  <br>
-• Part Code  <br>
-• Quantity Available  <br>
+• Item Name
+• Part Code
+• Quantity Available
 • Sale Price (if available)
 
-Ignore items that clearly do not match the request.
+Ignore inventory items that clearly do not match the request.
 
-### ഏറ്റവും അനുയോജ്യമായ ഭാഗം (BEST MATCH)
+BEST MATCH FOR CUSTOMER
 
-Part Name:  <br>
-Part Code:  <br>
+Part Name:
+Part Code:
 Quantity Available:
 
-Explain briefly why this part best matches the customer's request.
+Explain briefly why this is the best match for the customer's request.
 
-### ഭാഗത്തിന്റെ വിശദീകരണം (MECHANIC EXPLANATION - MALAYALAM)
+PART EXPLANATION
 
-Explain like a mechanic talking to a salesman:<br>
-• ഈ ഭാഗം എന്താണ്  <br>
-• വാഹനത്തിൽ എവിടെയാണ് ഉപയോഗിക്കുന്നത്  <br>
-• എന്ത് സിസ്റ്റത്തിന്റെ ഭാഗമാണ്  <br>
+Explain clearly:
+
+• What the part does
+• Where it is located in the vehicle
+• Which vehicle system it belongs to
   (Engine / Brake / Electrical / Cooling / Exhaust / Suspension / Body)
 
-### സാധാരണ പ്രശ്നങ്ങൾ (COMMON FAILURE SYMPTOMS)
+COMMON FAILURE SYMPTOMS
 
-Explain typical symptoms when this part fails so the salesman can confirm with the customer.<br>
-Example:<br>
-• ലൈറ്റ് തെളിയുന്നില്ല  <br>
-• ബ്രേക്ക് ശബ്ദം ഉണ്ടാകുന്നു  <br>
-• എൻജിൻ ചൂടാകുന്നു
+Explain typical symptoms when this part fails so the salesman can confirm with the customer.
 
-### ബന്ധപ്പെട്ട ഭാഗങ്ങൾ (RELATED PARTS TO SUGGEST)
+Example symptoms:
+• Light not working
+• Brake noise
+• Engine overheating
+• Vehicle not starting
 
-Suggest parts mechanics usually replace together.<br>
-Only mark parts as **"Shopൽ ലഭ്യമാണ്"** if they exist in the inventory list above.
+RELATED PARTS TO SUGGEST
 
-### OEM / ORIGINAL PART NUMBER
+Suggest parts that mechanics usually replace together with this part.
 
-If known, provide the possible OEM reference number used by manufacturers such as Maruti Suzuki or Hyundai.<br>
-If unsure, write:<br>
+Mark parts as "Available in Shop" ONLY if they appear in the inventory list above.
+
+OEM / ORIGINAL PART NUMBER
+
+Provide OEM reference numbers if known.
+
+If uncertain, write:
 Possible OEM Reference.
 
-### മെക്കാനിക് അറിവ് (MECHANIC TIP FOR SALESMAN)
+MECHANIC TIP FOR SALESMAN
 
-Teach the salesman useful knowledge such as:<br>
-• Mechanics also call this part by these names  <br>
-• How to identify the part quickly  <br>
+Teach the salesman useful knowledge such as:
+
+• Other names mechanics use for this part
+• How to visually identify it
 • Typical market price range
-
-----------------------------------
-
-### ENGLISH EXPLANATION
-
-Provide the same explanation again in English so the salesman can learn technical terminology.<br>
-The Malayalam explanation must always appear first.
-    """
+• Popular brands mechanics prefer
+"""
     try:
         r = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=400,
         )
