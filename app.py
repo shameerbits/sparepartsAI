@@ -33,7 +33,7 @@ def load_inventory(file) -> pd.DataFrame:
     return df
 
 
-def search_inventory(df: pd.DataFrame, query: str, top_n: int = 20) -> pd.DataFrame:
+def search_inventory(df: pd.DataFrame, query: str, top_n: int = 5) -> pd.DataFrame:
     if not query or df.empty:
         return pd.DataFrame()
     query = query.lower()
@@ -419,40 +419,6 @@ def maruti_direct_search(query: str, max_items: int = 10):
         return url, pd.DataFrame(), f"Maruti search failed: {e}"
 
 
-def sanitize_maruti_query(raw_query: str) -> str:
-    """Trim user query to likely part-name terms for Maruti URL lookup."""
-    raw_query = (raw_query or "").strip().lower()
-    if not raw_query:
-        return ""
-
-    cleaned = re.sub(r"[^a-z0-9\s]", " ", raw_query)
-    tokens = [t for t in cleaned.split() if t]
-
-    stop_words = {
-        "for", "with", "without", "and", "or", "the", "a", "an",
-        "car", "vehicle", "model", "year", "new", "old", "genuine",
-        "maruti", "suzuki",
-    }
-    model_words = {
-        "alto", "swift", "wagonr", "wagon", "baleno", "brezza", "ertiga",
-        "dzire", "celerio", "spresso", "ignis", "eeco", "ciaz", "fronx", "jimny",
-    }
-
-    filtered = []
-    for t in tokens:
-        if re.fullmatch(r"(19|20)\d{2}", t):
-            continue
-        if t.isdigit() or len(t) <= 1:
-            continue
-        if t in stop_words or t in model_words:
-            continue
-        filtered.append(t)
-
-    if filtered:
-        return " ".join(filtered)
-    return " ".join(tokens[:4])
-
-
 
 
 # --- Streamlit UI -----------------------------------------------------------
@@ -465,21 +431,6 @@ def load_default_inventory():
 
 # Load default inventory
 default_df = load_default_inventory()
-
-inventory_display_limit = st.slider(
-    "Inventory results to display",
-    min_value=5,
-    max_value=100,
-    value=20,
-    step=5,
-)
-maruti_display_limit = st.slider(
-    "Maruti results per page",
-    min_value=10,
-    max_value=100,
-    value=20,
-    step=5,
-)
 
 # Optional file upload
 uploaded_file = st.file_uploader("Upload Excel inventory (Optional - replaces default stock)", type=["xls", "xlsx"])
@@ -513,11 +464,11 @@ if st.button("Search"):
             search_terms += img_desc
         if query:
             search_terms = f"{query} {search_terms}" if search_terms else query
-        matches = search_inventory(df, search_terms, top_n=max(20, inventory_display_limit))
+        matches = search_inventory(df, search_terms)
         if matches.empty:
             st.write("No matching items found.")
         else:
-            display_df = matches[["item_name", "item_cd", "cat_name", "clsng_bal"]].head(inventory_display_limit).copy()
+            display_df = matches[["item_name", "item_cd", "cat_name", "clsng_bal"]].head(5).copy()
             display_df.columns = ["Item Name", "Part Code", "Category", "Qty"]
             st.dataframe(display_df)
 
@@ -526,7 +477,7 @@ if st.button("Search"):
                 df=df,
                 primary_matches=matches,
                 user_query=query or search_terms,
-                max_items=max(20, inventory_display_limit),
+                max_items=15,
             )
             matches_text = rows_to_text(explanation_context_df)
             
@@ -545,17 +496,10 @@ if st.button("Search"):
         if not maruti_query and not matches.empty:
             maruti_query = str(matches.iloc[0].get("item_name", "")).strip()
 
-        maruti_query_clean = sanitize_maruti_query(maruti_query)
-
         st.subheader("Maruti Genuine Parts Direct Search")
-        maruti_url, maruti_df, maruti_msg = maruti_direct_search(
-            maruti_query_clean or maruti_query,
-            max_items=max(20, maruti_display_limit * 5),
-        )
+        maruti_url, maruti_df, maruti_msg = maruti_direct_search(maruti_query)
         st.write(f"Search URL: {maruti_url}")
         st.write(f"Search Query Used: {maruti_query or 'N/A'}")
-        if maruti_query_clean and maruti_query_clean != maruti_query:
-            st.caption(f"Sanitized query sent to Maruti: {maruti_query_clean}")
 
         if maruti_msg:
             st.info(maruti_msg)
@@ -567,20 +511,6 @@ if st.button("Search"):
                 official_count = int((maruti_df["Source"] == "Official Card").sum())
                 st.caption(f"Official Maruti cards found: {official_count} / {len(maruti_df)}")
 
-            total_rows = len(maruti_df)
-            page_count = max(1, (total_rows + maruti_display_limit - 1) // maruti_display_limit)
-            page_no = st.number_input(
-                "Maruti results page",
-                min_value=1,
-                max_value=page_count,
-                value=1,
-                step=1,
-            )
-            start_idx = (int(page_no) - 1) * maruti_display_limit
-            end_idx = start_idx + maruti_display_limit
-            maruti_page_df = maruti_df.iloc[start_idx:end_idx]
-            st.caption(f"Showing Maruti results {start_idx + 1}-{min(end_idx, total_rows)} of {total_rows}")
-
             ordered_cols = [
                 "Part Name",
                 "Part Number",
@@ -590,5 +520,5 @@ if st.button("Search"):
                 "Source",
             ]
             display_cols = [c for c in ordered_cols if c in maruti_df.columns]
-            st.dataframe(maruti_page_df[display_cols] if display_cols else maruti_page_df)
+            st.dataframe(maruti_df[display_cols] if display_cols else maruti_df)
 
