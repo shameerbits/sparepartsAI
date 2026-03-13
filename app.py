@@ -628,11 +628,3 @@ if st.button("Search"):
             display_cols = [c for c in ordered_cols if c in maruti_df.columns]
             st.dataframe(maruti_df[display_cols] if display_cols else maruti_df)
 
-                "Possible MRP",
-                "Category",
-                "Product URL",
-                "Source",
-            ]
-            display_cols = [c for c in ordered_cols if c in maruti_df.columns]
-            st.dataframe(maruti_df[display_cols] if display_cols else maruti_df)
-
