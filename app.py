@@ -26,9 +26,20 @@ PART_SYNONYMS = {
     "mirror": "orvm mirror",
     "fan": "cooling fan",
     "radiator fan": "radiator cooling fan",
+    "fog light": "fog lamp",
+    "foglamp": "fog lamp",
+    "head lamp glass": "head lamp lens",
+    "car light": "head lamp",
 }
 
 SEARCH_STOP_WORDS = {"for", "with", "the", "part", "car"}
+
+QUERY_NOISE_WORDS = {
+    "swift", "alto", "wagonr", "wagon", "baleno", "brezza", "ertiga", "dzire",
+    "celerio", "spresso", "ignis", "eeco", "ciaz", "fronx", "jimny",
+    "maruti", "suzuki", "genuine", "original", "model", "vehicle", "auto",
+    "assembly", "set", "piece",
+}
 
 # --- inventory helpers -------------------------------------------------------
 @st.cache_data(show_spinner=False)
@@ -49,7 +60,8 @@ def load_inventory(file) -> pd.DataFrame:
 
 
 def normalize_query(query: str) -> str:
-    q = re.sub(r"\s+", " ", (query or "").strip().lower())
+    q = re.sub(r"[^a-z0-9\s]", " ", (query or "").strip().lower())
+    q = re.sub(r"\s+", " ", q)
     if not q:
         return ""
 
@@ -57,7 +69,70 @@ def normalize_query(query: str) -> str:
     for src in sorted(PART_SYNONYMS.keys(), key=len, reverse=True):
         q = re.sub(rf"\b{re.escape(src)}\b", PART_SYNONYMS[src], q)
 
+    tokens = [t for t in q.split() if t]
+    cleaned_tokens = []
+    for tok in tokens:
+        # Drop likely year values and noisy numeric fragments.
+        if re.fullmatch(r"(19|20)\d{2}", tok):
+            continue
+        if tok.isdigit() and len(tok) <= 4:
+            continue
+        if tok in QUERY_NOISE_WORDS:
+            continue
+        cleaned_tokens.append(tok)
+
+    # Keep order while removing duplicates.
+    seen = set()
+    deduped = []
+    for tok in cleaned_tokens:
+        if tok not in seen:
+            seen.add(tok)
+            deduped.append(tok)
+
+    q = " ".join(deduped).strip()
+
+    # Final pass to remap after token cleanup.
+    for src in sorted(PART_SYNONYMS.keys(), key=len, reverse=True):
+        q = re.sub(rf"\b{re.escape(src)}\b", PART_SYNONYMS[src], q)
+
     return re.sub(r"\s+", " ", q).strip()
+
+
+def build_actionable_search_query(normalized_query: str) -> str:
+    """Use GPT to create a compact, inventory-searchable query string.
+
+    This function only rewrites query text; inventory retrieval and ranking stay deterministic.
+    """
+    cleaned = re.sub(r"\s+", " ", (normalized_query or "").strip().lower())
+    if not cleaned:
+        return ""
+
+    prompt = f"""
+You are a spare-parts search query optimizer for inventory retrieval.
+
+Input is already normalized. Produce one actionable search query string for stock lookup.
+
+Rules:
+- Return only one short query phrase (3 to 8 words).
+- Include common catalog terms and close synonyms when useful.
+- Keep brand/model noise out unless critical for part identity.
+- No bullets, no explanations, no extra formatting.
+
+Input query: {cleaned}
+"""
+    try:
+        r = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=24,
+            temperature=0,
+        )
+        actionable = (r.choices[0].message.content or "").strip().lower()
+        actionable = re.sub(r"[^a-z0-9\s]", " ", actionable)
+        actionable = re.sub(r"\s+", " ", actionable).strip()
+        return actionable or cleaned
+    except Exception:
+        return cleaned
 
 
 def search_inventory(df: pd.DataFrame, query: str, top_n: int = 5) -> pd.DataFrame:
@@ -557,18 +632,18 @@ if st.button("Search"):
 
         raw_customer_query = (query or "").strip() or image_part_name
         normalized_query = normalize_query(raw_customer_query)
-        interpreted_query = interpret_query(normalized_query) if normalized_query else ""
-        deterministic_search_query = interpreted_query or normalized_query or raw_customer_query
+        actionable_query = build_actionable_search_query(normalized_query) if normalized_query else ""
+        deterministic_search_query = actionable_query or normalized_query or raw_customer_query
 
         if not deterministic_search_query and img_desc:
             deterministic_search_query = normalize_query(_extract_part_name_from_image_desc(img_desc) or img_desc[:80])
 
         if deterministic_search_query:
-            st.caption("Query Interpretation Flow")
+            st.caption("Understanding messy customer language and converting to inventory-searchable item name")
             st.write(f"User Query -> {raw_customer_query or 'N/A'}")
-            st.write(f"Normalized Query -> {normalized_query or 'N/A'}")
-            st.write(f"Interpreted Query (GPT) -> {interpreted_query or normalized_query or 'N/A'}")
-            st.caption(f'System interpreted query as: "{deterministic_search_query}"')
+            st.write(f"Normalized Query -> {normalized_query or raw_customer_query or 'N/A'}")
+            st.write(f"Actionable Search Query (GPT) -> {actionable_query or normalized_query or 'N/A'}")
+            st.caption(f'System search query: "{deterministic_search_query}"')
 
         matches = search_inventory(df, deterministic_search_query)
         if matches.empty:
