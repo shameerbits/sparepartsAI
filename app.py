@@ -307,6 +307,13 @@ def _parse_part_result_from_text(text: str, fallback_query: str = ""):
     }
 
 
+def _extract_datalayer_field(text: str, field_name: str) -> str:
+    if not text:
+        return ""
+    match = re.search(rf"{re.escape(field_name)}\s*:\s*'([^']+)'", text, flags=re.IGNORECASE)
+    return match.group(1).strip() if match else ""
+
+
 def maruti_direct_search(query: str, max_items: int = 10):
     base_url = "https://www.marutisuzuki.com/genuine-parts/query"
     query = (query or "").strip()
@@ -327,24 +334,39 @@ def maruti_direct_search(query: str, max_items: int = 10):
         records = []
         seen = set()
 
-        # Parse official card components first (observed structure from Maruti page).
-        cards = soup.find_all("div", class_="sliderBox")
+        # Parse official listing cards from the main listing container first.
+        listing_root = soup.find("div", class_="listingPageMain") or soup
+        cards = listing_root.select("div.listingMain div.sliderBox")
+        if not cards:
+            cards = listing_root.find_all("div", class_="sliderBox")
+
         for card in cards:
             try:
                 name_el = card.find("h3")
                 strong_el = card.find("strong")
                 price_el = card.find("div", class_="price")
-                link_el = card.find("a", href=True)
+                link_el = card.find("a", href=re.compile(r"^/genuine-parts/")) or card.find("a", href=True)
 
-                name = name_el.get_text(strip=True) if name_el else query
-                part_number = strong_el.get_text(strip=True) if strong_el else "N/A"
-                price = price_el.get_text(" ", strip=True) if price_el else "N/A"
+                onclick_blob = " ".join(
+                    el.get("onclick", "")
+                    for el in card.find_all(attrs={"onclick": True})
+                )
+
+                dl_name = _extract_datalayer_field(onclick_blob, "item_name")
+                dl_id = _extract_datalayer_field(onclick_blob, "item_id")
+                dl_price = _extract_datalayer_field(onclick_blob, "price")
+
+                name = name_el.get_text(strip=True) if name_el else (dl_name or query)
+                part_number = strong_el.get_text(strip=True) if strong_el else (dl_id or "N/A")
+                price = price_el.get_text(" ", strip=True) if price_el else (f"MRP: ₹ {dl_price}" if dl_price else "N/A")
                 category = card.get("data-category") or "N/A"
                 part_url = (
                     f"https://www.marutisuzuki.com{link_el['href']}"
                     if link_el and str(link_el["href"]).startswith("/")
                     else (link_el["href"] if link_el else "N/A")
                 )
+
+                query_score = fuzz.WRatio(query.lower(), name.lower()) if query and name else 0
 
                 item = {
                     "Part Name": name,
@@ -353,6 +375,7 @@ def maruti_direct_search(query: str, max_items: int = 10):
                     "Category": category,
                     "Product URL": part_url,
                     "Source": "Official Card",
+                    "_query_score": query_score,
                 }
 
                 key = (
@@ -364,14 +387,23 @@ def maruti_direct_search(query: str, max_items: int = 10):
                     continue
                 seen.add(key)
                 records.append(item)
-
-                if len(records) >= max_items:
-                    break
             except Exception:
                 continue
 
+        if records:
+            records = sorted(records, key=lambda x: x.get("_query_score", 0), reverse=True)
+            records = records[:max_items]
+            seen = {
+                (
+                    i["Part Name"].strip().lower(),
+                    i["Part Number"].strip().upper(),
+                    i["Possible MRP"].strip().lower(),
+                )
+                for i in records
+            }
+
         # Parse table rows first (if present).
-        for tr in soup.find_all("tr"):
+        for tr in listing_root.find_all("tr"):
             text = tr.get_text(" ", strip=True)
             item = _parse_part_result_from_text(text, fallback_query=query)
             if not item:
@@ -390,7 +422,7 @@ def maruti_direct_search(query: str, max_items: int = 10):
 
         # Fallback parse across likely result containers.
         if len(records) < max_items:
-            for el in soup.find_all(["li", "article", "div"], limit=700):
+            for el in listing_root.find_all(["li", "article", "div"], limit=700):
                 text = el.get_text(" ", strip=True)
                 if not text or len(text) < 18:
                     continue
@@ -414,7 +446,10 @@ def maruti_direct_search(query: str, max_items: int = 10):
         if not records:
             return url, pd.DataFrame(), "No structured part details found from Maruti direct search page."
 
-        return url, pd.DataFrame(records), ""
+        output_df = pd.DataFrame(records)
+        if "_query_score" in output_df.columns:
+            output_df = output_df.drop(columns=["_query_score"])
+        return url, output_df, ""
     except Exception as e:
         return url, pd.DataFrame(), f"Maruti search failed: {e}"
 
