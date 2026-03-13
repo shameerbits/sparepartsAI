@@ -252,6 +252,9 @@ def _parse_part_result_from_text(text: str, fallback_query: str = ""):
         "Part Name": part_name[:120] if part_name else (fallback_query or "Unknown"),
         "Part Number": part_no_match.group(1).upper() if part_no_match else "N/A",
         "Possible MRP": f"Rs {price_match.group(1)}" if price_match else "N/A",
+        "Category": "N/A",
+        "Product URL": "N/A",
+        "Source": "Fallback Parse",
     }
 
 
@@ -275,13 +278,60 @@ def maruti_direct_search(query: str, max_items: int = 10):
         records = []
         seen = set()
 
+        # Parse official card components first (observed structure from Maruti page).
+        cards = soup.find_all("div", class_="sliderBox")
+        for card in cards:
+            try:
+                name_el = card.find("h3")
+                strong_el = card.find("strong")
+                price_el = card.find("div", class_="price")
+                link_el = card.find("a", href=True)
+
+                name = name_el.get_text(strip=True) if name_el else query
+                part_number = strong_el.get_text(strip=True) if strong_el else "N/A"
+                price = price_el.get_text(" ", strip=True) if price_el else "N/A"
+                category = card.get("data-category") or "N/A"
+                part_url = (
+                    f"https://www.marutisuzuki.com{link_el['href']}"
+                    if link_el and str(link_el["href"]).startswith("/")
+                    else (link_el["href"] if link_el else "N/A")
+                )
+
+                item = {
+                    "Part Name": name,
+                    "Part Number": part_number,
+                    "Possible MRP": price,
+                    "Category": category,
+                    "Product URL": part_url,
+                    "Source": "Official Card",
+                }
+
+                key = (
+                    item["Part Name"].strip().lower(),
+                    item["Part Number"].strip().upper(),
+                    item["Possible MRP"].strip().lower(),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                records.append(item)
+
+                if len(records) >= max_items:
+                    break
+            except Exception:
+                continue
+
         # Parse table rows first (if present).
         for tr in soup.find_all("tr"):
             text = tr.get_text(" ", strip=True)
             item = _parse_part_result_from_text(text, fallback_query=query)
             if not item:
                 continue
-            key = (item["Part Name"], item["Part Number"], item["Possible MRP"])
+            key = (
+                item["Part Name"].strip().lower(),
+                item["Part Number"].strip().upper(),
+                item["Possible MRP"].strip().lower(),
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -290,7 +340,7 @@ def maruti_direct_search(query: str, max_items: int = 10):
                 break
 
         # Fallback parse across likely result containers.
-        if not records:
+        if len(records) < max_items:
             for el in soup.find_all(["li", "article", "div"], limit=700):
                 text = el.get_text(" ", strip=True)
                 if not text or len(text) < 18:
@@ -300,7 +350,11 @@ def maruti_direct_search(query: str, max_items: int = 10):
                 item = _parse_part_result_from_text(text, fallback_query=query)
                 if not item:
                     continue
-                key = (item["Part Name"], item["Part Number"], item["Possible MRP"])
+                key = (
+                    item["Part Name"].strip().lower(),
+                    item["Part Number"].strip().upper(),
+                    item["Possible MRP"].strip().lower(),
+                )
                 if key in seen:
                     continue
                 seen.add(key)
@@ -395,5 +449,19 @@ if st.button("Search"):
         if maruti_df.empty:
             st.write("No Maruti direct search results captured for this query.")
         else:
-            st.dataframe(maruti_df)
+            if "Source" in maruti_df.columns:
+                maruti_df = maruti_df.sort_values(by="Source", ascending=True)
+                official_count = int((maruti_df["Source"] == "Official Card").sum())
+                st.caption(f"Official Maruti cards found: {official_count} / {len(maruti_df)}")
+
+            ordered_cols = [
+                "Part Name",
+                "Part Number",
+                "Possible MRP",
+                "Category",
+                "Product URL",
+                "Source",
+            ]
+            display_cols = [c for c in ordered_cols if c in maruti_df.columns]
+            st.dataframe(maruti_df[display_cols] if display_cols else maruti_df)
 
