@@ -136,43 +136,66 @@ Input query: {cleaned}
 
 
 def search_inventory(df: pd.DataFrame, query: str, top_n: int = 5) -> pd.DataFrame:
+
     if not query or df.empty:
         return pd.DataFrame()
+
     query = query.lower()
 
-    # Fuzzy match across full search text.
-    choices = df["search_text"].tolist()
-    fuzzy_results = process.extract(query, choices, scorer=fuzz.WRatio, limit=max(30, top_n * 6))
+    # Break query into meaningful tokens
+    tokens = [t for t in re.split(r"\W+", query) if len(t) > 2]
 
-    score_by_idx = {}
-    for _match, score, idx in fuzzy_results:
-        score_by_idx[idx] = max(score_by_idx.get(idx, 0), float(score))
+    scores = []
 
-    # Token regex match to catch phrase variations and partial terms.
-    tokens = [t for t in re.split(r"\W+", query) if t and t not in SEARCH_STOP_WORDS]
-    if tokens:
-        token_pattern = "|".join(re.escape(t) for t in tokens)
-        token_mask = df["search_text"].astype(str).str.contains(token_pattern, case=False, regex=True, na=False)
-        token_indices = df[token_mask].index.tolist()
-        for idx in token_indices:
-            row_text = str(df.at[idx, "search_text"])
-            hit_count = sum(1 for t in tokens if re.search(rf"\b{re.escape(t)}\b", row_text))
-            token_score = 50 + (50 * hit_count / max(1, len(tokens)))
-            score_by_idx[idx] = max(score_by_idx.get(idx, 0), float(token_score))
+    for idx, row in df.iterrows():
 
-    if not score_by_idx:
+        text = str(row["search_text"]).lower()
+
+        score = 0
+
+        # --- Strong phrase match ---
+        if query in text:
+            score += 120
+
+        # --- Token based matching ---
+        for token in tokens:
+
+            if token in text:
+
+                if token in row["item_name"].lower():
+                    score += 40      # very strong match
+
+                elif token in row["cat_name"].lower():
+                    score += 25      # category match
+
+                else:
+                    score += 10      # weak match
+
+        # --- Fuzzy fallback ---
+        fuzzy = fuzz.partial_ratio(query, text)
+        score += fuzzy * 0.5
+
+        scores.append((idx, score))
+
+    if not scores:
         return pd.DataFrame()
 
-    rows = []
-    for idx, score in score_by_idx.items():
-        row = df.iloc[idx].copy()
-        row["_score"] = score
-        rows.append(row)
+    # Convert to dataframe
+    score_df = pd.DataFrame(scores, columns=["idx", "score"])
 
-    res_df = pd.DataFrame(rows)
-    res_df["clsng_bal_num"] = pd.to_numeric(res_df.get("clsng_bal", 0), errors="coerce").fillna(0)
-    res_df = res_df.sort_values(by=["_score", "clsng_bal_num"], ascending=[False, False])
-    return res_df.head(top_n)
+    score_df = score_df.sort_values("score", ascending=False)
+
+    top_indices = score_df.head(top_n)["idx"].tolist()
+
+    result = df.loc[top_indices].copy()
+
+    result["_score"] = score_df.head(top_n)["score"].values
+
+    result["clsng_bal_num"] = pd.to_numeric(result.get("clsng_bal", 0), errors="coerce").fillna(0)
+
+    result = result.sort_values(by=["_score", "clsng_bal_num"], ascending=[False, False])
+
+    return result
 
 
 def rows_to_text(df: pd.DataFrame) -> str:
