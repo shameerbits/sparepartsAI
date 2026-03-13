@@ -15,6 +15,21 @@ client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 st.title("AI Spare Parts Sales Assistant")
 
+PART_SYNONYMS = {
+    "headlight": "head lamp",
+    "head light": "head lamp",
+    "head assembly": "head lamp assembly",
+    "front light": "head lamp",
+    "back light": "tail lamp",
+    "rear light": "tail lamp",
+    "side mirror": "orvm mirror",
+    "mirror": "orvm mirror",
+    "fan": "cooling fan",
+    "radiator fan": "radiator cooling fan",
+}
+
+SEARCH_STOP_WORDS = {"for", "with", "the", "part", "car"}
+
 # --- inventory helpers -------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_inventory(file) -> pd.DataFrame:
@@ -33,22 +48,93 @@ def load_inventory(file) -> pd.DataFrame:
     return df
 
 
+def normalize_query(query: str) -> str:
+    q = re.sub(r"\s+", " ", (query or "").strip().lower())
+    if not q:
+        return ""
+
+    # Replace phrase-level synonyms first (longer keys first).
+    for src in sorted(PART_SYNONYMS.keys(), key=len, reverse=True):
+        q = re.sub(rf"\b{re.escape(src)}\b", PART_SYNONYMS[src], q)
+
+    return re.sub(r"\s+", " ", q).strip()
+
+
+def interpret_query(query: str) -> str:
+    cleaned = (query or "").strip()
+    if not cleaned:
+        return ""
+
+    prompt = f"""
+You are an automobile spare-part query normalizer.
+
+Convert customer wording into a standardized spare part search phrase.
+
+Examples:
+- head assembly -> head lamp assembly
+- front light -> head lamp
+- back light -> tail lamp
+- side mirror -> orvm mirror
+- radiator fan -> radiator cooling fan assembly
+
+Rules:
+- Return ONLY the normalized part name phrase.
+- No explanations, no punctuation list, no extra words.
+- If the query is already clear, return it unchanged.
+
+Customer query: {cleaned}
+"""
+    try:
+        r = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=20,
+            temperature=0,
+        )
+        interpreted = (r.choices[0].message.content or "").strip()
+        interpreted = re.sub(r"\s+", " ", interpreted).strip(" \n\t\"'")
+        return interpreted or cleaned
+    except Exception:
+        return cleaned
+
+
 def search_inventory(df: pd.DataFrame, query: str, top_n: int = 5) -> pd.DataFrame:
     if not query or df.empty:
         return pd.DataFrame()
     query = query.lower()
+
+    # Fuzzy match across full search text.
     choices = df["search_text"].tolist()
-    results = process.extract(query, choices, scorer=fuzz.WRatio, limit=20)
+    fuzzy_results = process.extract(query, choices, scorer=fuzz.WRatio, limit=max(30, top_n * 6))
+
+    score_by_idx = {}
+    for _match, score, idx in fuzzy_results:
+        score_by_idx[idx] = max(score_by_idx.get(idx, 0), float(score))
+
+    # Token regex match to catch phrase variations and partial terms.
+    tokens = [t for t in re.split(r"\W+", query) if t and t not in SEARCH_STOP_WORDS]
+    if tokens:
+        token_pattern = "|".join(re.escape(t) for t in tokens)
+        token_mask = df["search_text"].astype(str).str.contains(token_pattern, case=False, regex=True, na=False)
+        token_indices = df[token_mask].index.tolist()
+        for idx in token_indices:
+            row_text = str(df.at[idx, "search_text"])
+            hit_count = sum(1 for t in tokens if re.search(rf"\b{re.escape(t)}\b", row_text))
+            token_score = 50 + (50 * hit_count / max(1, len(tokens)))
+            score_by_idx[idx] = max(score_by_idx.get(idx, 0), float(token_score))
+
+    if not score_by_idx:
+        return pd.DataFrame()
+
     rows = []
-    for match, score, idx in results:
+    for idx, score in score_by_idx.items():
         row = df.iloc[idx].copy()
         row["_score"] = score
         rows.append(row)
-    if not rows:
-        return pd.DataFrame()
+
     res_df = pd.DataFrame(rows)
     res_df["clsng_bal_num"] = pd.to_numeric(res_df.get("clsng_bal", 0), errors="coerce").fillna(0)
-    res_df = res_df.sort_values(by=["clsng_bal_num", "_score"], ascending=[False, False])
+    res_df = res_df.sort_values(by=["_score", "clsng_bal_num"], ascending=[False, False])
     return res_df.head(top_n)
 
 
@@ -73,7 +159,9 @@ def build_related_inventory_context(
     if df.empty or primary_matches.empty:
         return primary_matches
 
-    chunks = [primary_matches.copy()]
+    primary = primary_matches.copy()
+    primary["_priority"] = 0
+    chunks = [primary]
 
     # Pull more items from categories already matched (e.g., electrical for head lamp).
     if "cat_name" in df.columns and "cat_name" in primary_matches.columns:
@@ -81,7 +169,9 @@ def build_related_inventory_context(
         cats = list(dict.fromkeys(cats))
         if cats:
             cat_mask = df["cat_name"].astype(str).str.lower().isin(cats)
-            chunks.append(df[cat_mask].copy())
+            cat_df = df[cat_mask].copy()
+            cat_df["_priority"] = 1
+            chunks.append(cat_df)
 
     # Add keyword-based matches from the query terms.
     tokens = [t for t in re.split(r"\W+", (user_query or "").lower()) if len(t) >= 3]
@@ -89,7 +179,9 @@ def build_related_inventory_context(
     if tokens:
         token_pattern = "|".join(re.escape(t) for t in tokens)
         tok_mask = df["search_text"].astype(str).str.contains(token_pattern, case=False, regex=True, na=False)
-        chunks.append(df[tok_mask].copy())
+        tok_df = df[tok_mask].copy()
+        tok_df["_priority"] = 1
+        chunks.append(tok_df)
 
     combined = pd.concat(chunks, ignore_index=True)
     dedupe_cols = [c for c in ["item_cd", "item_name", "cat_name"] if c in combined.columns]
@@ -100,8 +192,10 @@ def build_related_inventory_context(
 
     if "_score" not in combined.columns:
         combined["_score"] = 0
+    if "_priority" not in combined.columns:
+        combined["_priority"] = 1
     combined["clsng_bal_num"] = pd.to_numeric(combined.get("clsng_bal", 0), errors="coerce").fillna(0)
-    combined = combined.sort_values(by=["clsng_bal_num", "_score"], ascending=[False, False])
+    combined = combined.sort_values(by=["_priority", "_score", "clsng_bal_num"], ascending=[True, False, False])
     return combined.head(max_items)
 
 
@@ -144,8 +238,9 @@ def mechanic_explanation_english(matches_text: str, user_query: str) -> str:
     prompt = f"""
 You are an experienced automobile mechanic helping a junior spare parts shop salesman.
 
-Your job is to understand the customer's request and identify the correct spare part from the shop inventory. 
-Explain the part clearly so the salesman can confidently sell it and also learn about automobile parts.
+Your job is to explain inventory results already filtered by the system.
+Do not perform part selection beyond the provided inventory list.
+Explain clearly so the salesman can confidently sell and learn.
 
 ----------------------------------
 CUSTOMER REQUEST
@@ -161,21 +256,21 @@ IMPORTANT RULES
 
 1. The inventory list above is the ONLY source of stock availability.
 2. DO NOT invent parts that are not present in the inventory.
-3. Some search results may be weak matches. Ignore items that are clearly unrelated to the customer request.
-   Example: If the customer asked for a lamp but the inventory contains "silencer", ignore the silencer.
-4. Prefer parts whose names strongly match the customer request.
-5. Think like a real mechanic and infer the most likely part the customer needs.
-6. If a vehicle model is mentioned (Swift, Alto, WagonR, etc.), consider typical parts used in that vehicle.
-7. If possible, provide the original OEM part number used by manufacturers such as:
+3. DO NOT override or re-rank inventory results generated by system search.
+4. Only explain parts shown in the provided inventory list.
+5. Choose the most relevant item ONLY from this list.
+6. If possible, provide the original OEM part number used by manufacturers such as:
    - Maruti Suzuki
    - Hyundai
    - Toyota
    - Honda
    - Tata
    - Mahindra
-8. If the OEM number is uncertain, write "Possible OEM Reference".
-9. For the RELATED PARTS section, suggest common co-replacement parts even if not found in stock,
+7. If the OEM number is uncertain, write "Possible OEM Reference".
+8. For the RELATED PARTS section, suggest common co-replacement parts even if not found in stock,
    but clearly mark each as either "Available in Shop" or "Not found in current inventory".
+9. Explain in simple language suitable for a spare parts shop salesman.
+10. Include Malayalam wherever helpful for clarity.
 
 ----------------------------------
 OUTPUT FORMAT
@@ -489,17 +584,27 @@ if st.button("Search"):
     elif not query and not image_file:
         st.warning("Enter a text query or upload an image.")
     else:
-        search_terms = ""
         img_desc = ""
+        image_part_name = ""
         if image_file:
             st.info("Analyzing image...")
             img_desc = analyze_image(image_file)
             st.write("**Image recognition output:**")
             st.write(img_desc)
-            search_terms += img_desc
-        if query:
-            search_terms = f"{query} {search_terms}" if search_terms else query
-        matches = search_inventory(df, search_terms)
+            image_part_name = _extract_part_name_from_image_desc(img_desc)
+
+        raw_customer_query = (query or "").strip() or image_part_name
+        normalized_query = normalize_query(raw_customer_query)
+        interpreted_query = interpret_query(normalized_query) if normalized_query else ""
+        deterministic_search_query = interpreted_query or normalized_query or raw_customer_query
+
+        if not deterministic_search_query and img_desc:
+            deterministic_search_query = normalize_query(_extract_part_name_from_image_desc(img_desc) or img_desc[:80])
+
+        if deterministic_search_query:
+            st.caption(f'System interpreted query as: "{deterministic_search_query}"')
+
+        matches = search_inventory(df, deterministic_search_query)
         if matches.empty:
             st.write("No matching items found.")
         else:
@@ -511,21 +616,21 @@ if st.button("Search"):
             explanation_context_df = build_related_inventory_context(
                 df=df,
                 primary_matches=matches,
-                user_query=query or search_terms,
+                user_query=deterministic_search_query,
                 max_items=15,
             )
             matches_text = rows_to_text(explanation_context_df)
             
             # Generate comprehensive explanation (includes Malayalam)
-            explanation = mechanic_explanation_english(matches_text, query or "image lookup")
+            explanation_input = deterministic_search_query or query or image_part_name or "image lookup"
+            explanation = mechanic_explanation_english(matches_text, explanation_input)
             
             # Display explanation as a styled webpage section
             st.subheader("Spare Parts Analysis")
             st.markdown(explanation, unsafe_allow_html=True)
 
         # Maruti Genuine Parts direct search using identified part name/query.
-        image_part_name = _extract_part_name_from_image_desc(img_desc)
-        maruti_query = (query or "").strip()
+        maruti_query = (deterministic_search_query or "").strip()
         if not maruti_query and image_part_name:
             maruti_query = image_part_name
         if not maruti_query and not matches.empty:
