@@ -54,8 +54,16 @@ def load_inventory(file) -> pd.DataFrame:
             df[col] = ""
     # create searchable field
     df["search_text"] = (
-        df["item_name"] + " " + df["item_cd"] + " " + df["cat_name"] + " " + df["hsncode"]
+        df["item_name"] + " " +
+        df["item_cd"] + " " +
+        df["cat_name"] + " " +
+        df["hsncode"]
     ).str.lower()
+
+    # normalize common spare part abbreviations
+    df["search_text"] = df["search_text"].str.replace("assy", "assembly")
+    df["search_text"] = df["search_text"].str.replace("lamp assy", "lamp assembly")
+    df["search_text"] = df["search_text"].str.replace("brg", "bearing")
     return df
 
 
@@ -97,6 +105,52 @@ def normalize_query(query: str) -> str:
 
     return re.sub(r"\s+", " ", q).strip()
 
+def identify_catalogue_part(query: str) -> str:
+    """
+    Use GPT to convert messy customer query
+    into official spare parts catalogue name
+    """
+
+    prompt = f"""
+You are an automotive spare parts catalogue expert.
+
+Convert the customer request into the official spare parts catalogue part name.
+
+Rules:
+- Return ONLY the part name used in spare parts catalogues
+- Do not include vehicle model
+- Do not include year
+- Maximum 3 words
+- No explanation
+
+Examples:
+fog light -> fog lamp
+front light -> head lamp
+rear light -> tail lamp
+side mirror -> orvm mirror
+front shock -> shock absorber
+radiator fan -> cooling fan
+
+Customer query:
+{query}
+"""
+
+    try:
+        r = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=10
+        )
+
+        part_name = r.choices[0].message.content.strip().lower()
+
+        part_name = re.sub(r"[^a-z0-9\s]", "", part_name)
+
+        return part_name
+
+    except Exception:
+        return query
 
 def build_actionable_search_query(normalized_query: str) -> str:
     """Use GPT to create a compact, inventory-searchable query string.
@@ -655,8 +709,12 @@ if st.button("Search"):
 
         raw_customer_query = (query or "").strip() or image_part_name
         normalized_query = normalize_query(raw_customer_query)
-        actionable_query = build_actionable_search_query(normalized_query) if normalized_query else ""
-        deterministic_search_query = actionable_query or normalized_query or raw_customer_query
+
+        # GPT interprets the catalogue part
+        catalogue_part = identify_catalogue_part(normalized_query)
+
+        # Final search query used for inventory lookup
+        deterministic_search_query = catalogue_part or normalized_query
 
         if not deterministic_search_query and img_desc:
             deterministic_search_query = normalize_query(_extract_part_name_from_image_desc(img_desc) or img_desc[:80])
@@ -665,7 +723,7 @@ if st.button("Search"):
             st.caption("Understanding messy customer language and converting to inventory-searchable item name")
             st.write(f"User Query -> {raw_customer_query or 'N/A'}")
             st.write(f"Normalized Query -> {normalized_query or raw_customer_query or 'N/A'}")
-            st.write(f"Actionable Search Query (GPT) -> {actionable_query or normalized_query or 'N/A'}")
+            st.write(f"Catalogue Part Identified (GPT) -> {catalogue_part}")
             st.caption(f'System search query: "{deterministic_search_query}"')
 
         matches = search_inventory(df, deterministic_search_query)
