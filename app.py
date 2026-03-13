@@ -60,6 +60,51 @@ def rows_to_text(df: pd.DataFrame) -> str:
     return subset.to_string(index=False)
 
 
+def build_related_inventory_context(
+    df: pd.DataFrame,
+    primary_matches: pd.DataFrame,
+    user_query: str,
+    max_items: int = 15,
+) -> pd.DataFrame:
+    """Build a broader but relevant inventory slice for LLM reasoning.
+
+    Includes: primary matches + same categories + query-token fuzzy matches.
+    """
+    if df.empty or primary_matches.empty:
+        return primary_matches
+
+    chunks = [primary_matches.copy()]
+
+    # Pull more items from categories already matched (e.g., electrical for head lamp).
+    if "cat_name" in df.columns and "cat_name" in primary_matches.columns:
+        cats = [str(x).strip().lower() for x in primary_matches["cat_name"].tolist() if str(x).strip()]
+        cats = list(dict.fromkeys(cats))
+        if cats:
+            cat_mask = df["cat_name"].astype(str).str.lower().isin(cats)
+            chunks.append(df[cat_mask].copy())
+
+    # Add keyword-based matches from the query terms.
+    tokens = [t for t in re.split(r"\W+", (user_query or "").lower()) if len(t) >= 3]
+    tokens = [t for t in tokens if t not in {"for", "and", "with", "the", "part", "car"}]
+    if tokens:
+        token_pattern = "|".join(re.escape(t) for t in tokens)
+        tok_mask = df["search_text"].astype(str).str.contains(token_pattern, case=False, regex=True, na=False)
+        chunks.append(df[tok_mask].copy())
+
+    combined = pd.concat(chunks, ignore_index=True)
+    dedupe_cols = [c for c in ["item_cd", "item_name", "cat_name"] if c in combined.columns]
+    if dedupe_cols:
+        combined = combined.drop_duplicates(subset=dedupe_cols, keep="first")
+    else:
+        combined = combined.drop_duplicates(keep="first")
+
+    if "_score" not in combined.columns:
+        combined["_score"] = 0
+    combined["clsng_bal_num"] = pd.to_numeric(combined.get("clsng_bal", 0), errors="coerce").fillna(0)
+    combined = combined.sort_values(by=["clsng_bal_num", "_score"], ascending=[False, False])
+    return combined.head(max_items)
+
+
 def analyze_image(uploaded_file) -> str:
     try:
         img_bytes = uploaded_file.read()
@@ -129,6 +174,8 @@ IMPORTANT RULES
    - Tata
    - Mahindra
 8. If the OEM number is uncertain, write "Possible OEM Reference".
+9. For the RELATED PARTS section, suggest common co-replacement parts even if not found in stock,
+   but clearly mark each as either "Available in Shop" or "Not found in current inventory".
 
 ----------------------------------
 OUTPUT FORMAT
@@ -175,7 +222,9 @@ RELATED PARTS TO SUGGEST
 
 Suggest parts that mechanics usually replace together with this part.
 
-Mark parts as "Available in Shop" ONLY if they appear in the inventory list above.
+For each suggested related part, add an availability tag:
+• Available in Shop (only if present in the inventory list above)
+• Not found in current inventory
 
 OEM / ORIGINAL PART NUMBER
 
@@ -419,10 +468,18 @@ if st.button("Search"):
         if matches.empty:
             st.write("No matching items found.")
         else:
-            display_df = matches[["item_name", "item_cd", "cat_name", "clsng_bal"]].copy()
+            display_df = matches[["item_name", "item_cd", "cat_name", "clsng_bal"]].head(5).copy()
             display_df.columns = ["Item Name", "Part Code", "Category", "Qty"]
             st.dataframe(display_df)
-            matches_text = rows_to_text(matches)
+
+            # Give LLM slightly broader relevant stock context for related-part suggestions.
+            explanation_context_df = build_related_inventory_context(
+                df=df,
+                primary_matches=matches,
+                user_query=query or search_terms,
+                max_items=15,
+            )
+            matches_text = rows_to_text(explanation_context_df)
             
             # Generate comprehensive explanation (includes Malayalam)
             explanation = mechanic_explanation_english(matches_text, query or "image lookup")
