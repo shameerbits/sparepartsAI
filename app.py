@@ -1,10 +1,14 @@
 import os
 import base64
 import imghdr
+import re
 import streamlit as st
 import pandas as pd
+import requests
 from rapidfuzz import process, fuzz
+from bs4 import BeautifulSoup
 from openai import OpenAI
+from urllib.parse import quote
 
 # initialize client
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -200,6 +204,118 @@ Teach the salesman useful knowledge such as:
         return f"(error generating explanation: {e})"
 
 
+def _extract_part_name_from_image_desc(image_desc: str) -> str:
+    if not image_desc:
+        return ""
+    lines = [ln.strip(" -*\t") for ln in image_desc.splitlines() if ln.strip()]
+    # Prefer explicit labels like "Part name: ..."
+    for line in lines:
+        m = re.search(r"part\s*name\s*[:\-]\s*(.+)", line, flags=re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+    # Fallback to first concise non-empty line.
+    return lines[0] if lines else ""
+
+
+def _parse_part_result_from_text(text: str, fallback_query: str = ""):
+    if not text:
+        return None
+    normalized = " ".join(text.split())
+    if len(normalized) < 10:
+        return None
+
+    part_no_match = re.search(
+        r"(?:part\s*(?:no|number|#)\s*[:\-]?\s*)?([A-Z0-9][A-Z0-9\-]{5,})",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    price_match = re.search(
+        r"(?:MRP|Rs\.?|INR)\s*[:\-]?\s*([0-9][0-9,]*(?:\.\d{1,2})?)",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+
+    # Build a practical candidate part name from the front of the snippet.
+    part_name = normalized
+    for token in ["Part No", "Part Number", "MRP", "Rs.", "INR"]:
+        idx = part_name.lower().find(token.lower())
+        if idx > 0:
+            part_name = part_name[:idx].strip(" -:|,")
+            break
+    if not part_name and fallback_query:
+        part_name = fallback_query
+
+    if not part_no_match and not price_match and not fallback_query:
+        return None
+
+    return {
+        "Part Name": part_name[:120] if part_name else (fallback_query or "Unknown"),
+        "Part Number": part_no_match.group(1).upper() if part_no_match else "N/A",
+        "Possible MRP": f"Rs {price_match.group(1)}" if price_match else "N/A",
+    }
+
+
+def maruti_direct_search(query: str, max_items: int = 10):
+    base_url = "https://www.marutisuzuki.com/genuine-parts/query"
+    query = (query or "").strip()
+    if not query:
+        return f"{base_url}/", pd.DataFrame(), "No search query provided for Maruti lookup."
+
+    url = f"{base_url}/{quote(query)}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        if response.status_code != 200:
+            return url, pd.DataFrame(), f"Maruti search returned HTTP {response.status_code}."
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        records = []
+        seen = set()
+
+        # Parse table rows first (if present).
+        for tr in soup.find_all("tr"):
+            text = tr.get_text(" ", strip=True)
+            item = _parse_part_result_from_text(text, fallback_query=query)
+            if not item:
+                continue
+            key = (item["Part Name"], item["Part Number"], item["Possible MRP"])
+            if key in seen:
+                continue
+            seen.add(key)
+            records.append(item)
+            if len(records) >= max_items:
+                break
+
+        # Fallback parse across likely result containers.
+        if not records:
+            for el in soup.find_all(["li", "article", "div"], limit=700):
+                text = el.get_text(" ", strip=True)
+                if not text or len(text) < 18:
+                    continue
+                if not re.search(r"part|mrp|rs\.?|inr|number|genuine", text, flags=re.IGNORECASE):
+                    continue
+                item = _parse_part_result_from_text(text, fallback_query=query)
+                if not item:
+                    continue
+                key = (item["Part Name"], item["Part Number"], item["Possible MRP"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                records.append(item)
+                if len(records) >= max_items:
+                    break
+
+        if not records:
+            return url, pd.DataFrame(), "No structured part details found from Maruti direct search page."
+
+        return url, pd.DataFrame(records), ""
+    except Exception as e:
+        return url, pd.DataFrame(), f"Maruti search failed: {e}"
+
+
 
 
 # --- Streamlit UI -----------------------------------------------------------
@@ -236,6 +352,7 @@ if st.button("Search"):
         st.warning("Enter a text query or upload an image.")
     else:
         search_terms = ""
+        img_desc = ""
         if image_file:
             st.info("Analyzing image...")
             img_desc = analyze_image(image_file)
@@ -259,4 +376,24 @@ if st.button("Search"):
             # Display explanation as a styled webpage section
             st.subheader("Spare Parts Analysis")
             st.markdown(explanation, unsafe_allow_html=True)
+
+        # Maruti Genuine Parts direct search using identified part name/query.
+        image_part_name = _extract_part_name_from_image_desc(img_desc)
+        maruti_query = (query or "").strip()
+        if not maruti_query and image_part_name:
+            maruti_query = image_part_name
+        if not maruti_query and not matches.empty:
+            maruti_query = str(matches.iloc[0].get("item_name", "")).strip()
+
+        st.subheader("Maruti Genuine Parts Direct Search")
+        maruti_url, maruti_df, maruti_msg = maruti_direct_search(maruti_query)
+        st.write(f"Search URL: {maruti_url}")
+        st.write(f"Search Query Used: {maruti_query or 'N/A'}")
+
+        if maruti_msg:
+            st.info(maruti_msg)
+        if maruti_df.empty:
+            st.write("No Maruti direct search results captured for this query.")
+        else:
+            st.dataframe(maruti_df)
 
