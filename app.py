@@ -60,44 +60,6 @@ def normalize_query(query: str) -> str:
     return re.sub(r"\s+", " ", q).strip()
 
 
-def interpret_query(query: str) -> str:
-    cleaned = (query or "").strip()
-    if not cleaned:
-        return ""
-
-    prompt = f"""
-You are an automobile spare-part query normalizer.
-
-Convert customer wording into a standardized spare part search phrase.
-
-Examples:
-- head assembly -> head lamp assembly
-- front light -> head lamp
-- back light -> tail lamp
-- side mirror -> orvm mirror
-- radiator fan -> radiator cooling fan assembly
-
-Rules:
-- Return ONLY the normalized part name phrase.
-- No explanations, no punctuation list, no extra words.
-- If the query is already clear, return it unchanged.
-
-Customer query: {cleaned}
-"""
-    try:
-        r = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=20,
-            temperature=0,
-        )
-        interpreted = (r.choices[0].message.content or "").strip()
-        interpreted = re.sub(r"\s+", " ", interpreted).strip(" \n\t\"'")
-        return interpreted or cleaned
-    except Exception:
-        return cleaned
-
-
 def search_inventory(df: pd.DataFrame, query: str, top_n: int = 5) -> pd.DataFrame:
     if not query or df.empty:
         return pd.DataFrame()
@@ -602,6 +564,10 @@ if st.button("Search"):
             deterministic_search_query = normalize_query(_extract_part_name_from_image_desc(img_desc) or img_desc[:80])
 
         if deterministic_search_query:
+            st.caption("Query Interpretation Flow")
+            st.write(f"User Query -> {raw_customer_query or 'N/A'}")
+            st.write(f"Normalized Query -> {normalized_query or 'N/A'}")
+            st.write(f"Interpreted Query (GPT) -> {interpreted_query or normalized_query or 'N/A'}")
             st.caption(f'System interpreted query as: "{deterministic_search_query}"')
 
         matches = search_inventory(df, deterministic_search_query)
@@ -654,6 +620,14 @@ if st.button("Search"):
             ordered_cols = [
                 "Part Name",
                 "Part Number",
+                "Possible MRP",
+                "Category",
+                "Product URL",
+                "Source",
+            ]
+            display_cols = [c for c in ordered_cols if c in maruti_df.columns]
+            st.dataframe(maruti_df[display_cols] if display_cols else maruti_df)
+
                 "Possible MRP",
                 "Category",
                 "Product URL",
