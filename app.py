@@ -14,6 +14,11 @@ from urllib.parse import quote
 # initialize client
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
+# model selection
+PART_QUERY_MODEL = os.environ.get("PART_QUERY_MODEL", "gpt-5")
+IMAGE_ANALYSIS_MODEL = os.environ.get("IMAGE_ANALYSIS_MODEL", "gpt-4.1-mini")
+MECHANIC_RESPONSE_MODEL = os.environ.get("MECHANIC_RESPONSE_MODEL", "gpt-4o-mini")
+
 st.title("AI Spare Parts Sales Assistant")
 
 # --- inventory helpers -------------------------------------------------------
@@ -62,6 +67,38 @@ def _remove_year_tokens(text: str) -> str:
     return " ".join(tokens).strip()
 
 
+def _build_inventory_rag_query(parsed: dict) -> str:
+    fields_order = [
+        "model",
+        "part_name",
+        "side",
+        "type",
+        "part_number",
+        "part",
+        "category",
+        "hsn",
+    ]
+
+    terms = []
+    for key in fields_order:
+        value = _safe_phrase(str(parsed.get(key, "")))
+        if value:
+            terms.append(value)
+
+    if parsed.get("part_number"):
+        terms.append("part code")
+
+    # de-dupe while preserving order
+    seen = set()
+    deduped = []
+    for term in terms:
+        if term not in seen:
+            seen.add(term)
+            deduped.append(term)
+
+    return " ".join(deduped).strip()
+
+
 def build_actionable_search_query(user_query: str) -> dict:
     """Use GPT once to normalize and derive both stock and website search queries."""
     cleaned = re.sub(r"\s+", " ", (user_query or "").strip().lower())
@@ -73,34 +110,88 @@ def build_actionable_search_query(user_query: str) -> dict:
         }
 
     prompt = f"""
-You are an automotive spare-parts search normalizer.
+You are an automotive spare parts query interpreter.
 
-Given a raw user search, return JSON with three strings.
+Your job is to convert a customer's natural language spare-parts search query into a structured JSON format that can be used for accurate RAG search.
 
-Output format (strict JSON only):
+Extract information only if it is clearly mentioned or confidently inferred from the query. If a field cannot be determined, leave it as an empty string "".
+
+Return ONLY valid JSON. Do not include explanations.
+
+Fields to extract:
+
+model: vehicle model name (example: swift, baleno, alto)
+part_name: official catalogue style name if possible (example: fog lamp assembly, head lamp assembly)
+side: LH or RH if left or right is mentioned
+type: part version like type1, type2, type3 if mentioned
+part_number: only if explicitly mentioned in the query
+part: generic part name (example: fog lamp, head lamp, bumper)
+category: vehicle system category (examples: lighting, body, engine, electrical, cooling)
+hsn: HSN code if the part clearly belongs to a known category
+
+HSN mapping rules:
+head lamp -> 85122010
+fog lamp -> 85122020
+tail lamp -> 85122090
+horn -> 85123000
+wiper -> 85124000
+
+Category mapping rules:
+head lamp, fog lamp, tail lamp -> lighting
+bumper, grille, fender -> body
+radiator -> cooling
+air filter -> intake
+brake pad -> braking
+
+Side mapping rules:
+left, driver side -> LH
+right, passenger side -> RH
+
+Example:
+
+Customer Query:
+"swift 2012 left fog lamp"
+
+Response:
 {{
-  "normalized_query": "kebab-case normalized string like ertiga-engine-cooler",
-  "inventory_query": "query for stock RAG including model + part name + part code intent",
-  "maruti_query": "query for Maruti website with model + part, but NO year"
+ "model": "swift",
+ "part_name": "fog lamp assembly",
+ "side": "LH",
+ "type": "",
+ "part_number": "",
+ "part": "fog lamp",
+ "category": "lighting",
+ "hsn": "85122020"
 }}
 
-Rules:
-- Use only lowercase letters, digits, spaces, and hyphen in values.
-- "normalized_query" must be kebab-case.
-- "inventory_query" must prioritize stock retrieval terms and include part-code intent.
-- "maruti_query" must NOT include any year token.
-- Return only valid JSON. No markdown, no explanation.
+Customer Query:
+"baleno headlight right"
 
-User search: {cleaned}
+Response:
+{{
+ "model": "baleno",
+ "part_name": "head lamp assembly",
+ "side": "RH",
+ "type": "",
+ "part_number": "",
+ "part": "head lamp",
+ "category": "lighting",
+ "hsn": "85122010"
+}}
+
+Now convert the following customer query into the JSON structure.
+
+Customer Query:
+{cleaned}
 """
 
-    fallback_normalized = _safe_slug(cleaned)
-    fallback_inventory = _safe_phrase(f"{_remove_year_tokens(cleaned)} part code")
+    fallback_normalized = _safe_slug(_remove_year_tokens(cleaned))
+    fallback_inventory = _safe_phrase(_remove_year_tokens(cleaned))
     fallback_maruti = _safe_phrase(_remove_year_tokens(cleaned))
 
     try:
         r = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=PART_QUERY_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=120,
@@ -109,9 +200,38 @@ User search: {cleaned}
 
         payload = json.loads((r.choices[0].message.content or "").strip())
 
-        normalized = _safe_slug(str(payload.get("normalized_query", ""))) or fallback_normalized
-        inventory_query = _safe_phrase(str(payload.get("inventory_query", ""))) or fallback_inventory
-        maruti_query = _safe_phrase(str(payload.get("maruti_query", ""))) or fallback_maruti
+        parsed = {
+            "model": _safe_phrase(str(payload.get("model", ""))),
+            "part_name": _safe_phrase(str(payload.get("part_name", ""))),
+            "side": _safe_phrase(str(payload.get("side", ""))),
+            "type": _safe_phrase(str(payload.get("type", ""))),
+            "part_number": _safe_phrase(str(payload.get("part_number", ""))),
+            "part": _safe_phrase(str(payload.get("part", ""))),
+            "category": _safe_phrase(str(payload.get("category", ""))),
+            "hsn": _safe_phrase(str(payload.get("hsn", ""))),
+        }
+
+        normalized_source = " ".join(
+            x
+            for x in [parsed.get("model", ""), parsed.get("part", "") or parsed.get("part_name", "")]
+            if x
+        ).strip() or fallback_normalized
+        normalized = _safe_slug(normalized_source) or fallback_normalized
+
+        inventory_query = _build_inventory_rag_query(parsed) or fallback_inventory
+
+        maruti_query = _safe_phrase(
+            " ".join(
+                x
+                for x in [
+                    parsed.get("model", ""),
+                    parsed.get("part_name", "") or parsed.get("part", ""),
+                    parsed.get("side", ""),
+                    parsed.get("type", ""),
+                ]
+                if x
+            )
+        ) or fallback_maruti
         maruti_query = _safe_phrase(_remove_year_tokens(maruti_query))
 
         return {
@@ -268,7 +388,7 @@ def analyze_image(uploaded_file) -> str:
             "Be concise and practical for spare parts shop use.\n"
         )
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=IMAGE_ANALYSIS_MODEL,
             messages=[
                 {
                     "role": "user",
@@ -391,7 +511,7 @@ Teach the salesman useful knowledge such as:
 """
     try:
         r = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=MECHANIC_RESPONSE_MODEL,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=400,
         )
