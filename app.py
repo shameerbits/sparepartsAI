@@ -1,6 +1,6 @@
 import os
 import base64
-import imghdr
+import io
 import re
 import json
 import streamlit as st
@@ -9,6 +9,7 @@ import requests
 from rapidfuzz import fuzz
 from bs4 import BeautifulSoup
 from openai import OpenAI
+from PIL import Image
 from urllib.parse import quote
 
 # initialize client
@@ -437,7 +438,15 @@ def analyze_image(uploaded_file) -> str:
     try:
         uploaded_file.seek(0)
         img_bytes = uploaded_file.read()
-        ext = imghdr.what(None, img_bytes) or "png"
+        ext = "png"
+        try:
+            with Image.open(io.BytesIO(img_bytes)) as img:
+                detected_format = (img.format or "").lower()
+                if detected_format:
+                    ext = "jpeg" if detected_format == "jpg" else detected_format
+        except Exception:
+            # Keep png fallback if image format cannot be determined.
+            pass
         b64 = base64.b64encode(img_bytes).decode()
         data_url = f"data:image/{ext};base64,{b64}"
         prompt = (
