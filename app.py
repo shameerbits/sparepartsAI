@@ -24,8 +24,10 @@ PART_QUERY_FALLBACK_MODEL = os.environ.get("PART_QUERY_FALLBACK_MODEL", "gpt-4.1
 IMAGE_ANALYSIS_MODEL = os.environ.get("IMAGE_ANALYSIS_MODEL", "gpt-4.1-mini")
 MECHANIC_RESPONSE_MODEL = os.environ.get("MECHANIC_RESPONSE_MODEL", "gpt-4o-mini")
 
+st.set_page_config(initial_sidebar_state="collapsed")
 st.title("AI Spare Parts Sales Assistant")
-debug_mode = st.sidebar.checkbox("Enable debug", value=False)
+with st.sidebar.expander("Debug", expanded=False):
+    debug_mode = st.checkbox("Enable debug", value=False)
 debug_window = st.expander("Debug Window", expanded=False) if debug_mode else None
 
 # --- inventory helpers -------------------------------------------------------
