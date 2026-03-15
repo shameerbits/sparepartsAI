@@ -25,7 +25,7 @@ IMAGE_ANALYSIS_MODEL = os.environ.get("IMAGE_ANALYSIS_MODEL", "gpt-4.1-mini")
 MECHANIC_RESPONSE_MODEL = os.environ.get("MECHANIC_RESPONSE_MODEL", "gpt-4o-mini")
 
 st.set_page_config(initial_sidebar_state="collapsed")
-st.title("AI Spare Parts Sales Assistant")
+st.title("Parakkott Enterprise - AI Spare Parts Sales Assistant")
 with st.sidebar.expander("Debug", expanded=False):
     debug_mode = st.checkbox("Enable debug", value=False)
 debug_window = st.expander("Debug Window", expanded=False) if debug_mode else None
