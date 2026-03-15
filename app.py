@@ -16,6 +16,7 @@ client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # model selection
 PART_QUERY_MODEL = os.environ.get("PART_QUERY_MODEL", "gpt-5")
+PART_QUERY_FALLBACK_MODEL = os.environ.get("PART_QUERY_FALLBACK_MODEL", "gpt-4.1")
 IMAGE_ANALYSIS_MODEL = os.environ.get("IMAGE_ANALYSIS_MODEL", "gpt-4.1-mini")
 MECHANIC_RESPONSE_MODEL = os.environ.get("MECHANIC_RESPONSE_MODEL", "gpt-4o-mini")
 
@@ -67,6 +68,19 @@ def _remove_year_tokens(text: str) -> str:
     return " ".join(tokens).strip()
 
 
+def _empty_parsed_query() -> dict:
+    return {
+        "model": "",
+        "part_name": "",
+        "side": "",
+        "type": "",
+        "part_number": "",
+        "part": "",
+        "category": "",
+        "hsn": "",
+    }
+
+
 def _build_inventory_rag_query(parsed: dict) -> str:
     fields_order = [
         "model",
@@ -104,9 +118,11 @@ def build_actionable_search_query(user_query: str) -> dict:
     cleaned = re.sub(r"\s+", " ", (user_query or "").strip().lower())
     if not cleaned:
         return {
+            "parsed_query": _empty_parsed_query(),
             "normalized_query": "",
             "inventory_query": "",
             "maruti_query": "",
+            "parse_error": "empty user query",
         }
 
     prompt = f"""
@@ -189,18 +205,16 @@ Customer Query:
     fallback_inventory = _safe_phrase(_remove_year_tokens(cleaned))
     fallback_maruti = _safe_phrase(_remove_year_tokens(cleaned))
 
-    try:
+    def _parse_with_model(model_name: str) -> dict:
         r = client.chat.completions.create(
-            model=PART_QUERY_MODEL,
+            model=model_name,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=120,
             response_format={"type": "json_object"},
         )
-
         payload = json.loads((r.choices[0].message.content or "").strip())
-
-        parsed = {
+        return {
             "model": _safe_phrase(str(payload.get("model", ""))),
             "part_name": _safe_phrase(str(payload.get("part_name", ""))),
             "side": _safe_phrase(str(payload.get("side", ""))),
@@ -211,41 +225,55 @@ Customer Query:
             "hsn": _safe_phrase(str(payload.get("hsn", ""))),
         }
 
-        normalized_source = " ".join(
-            x
-            for x in [parsed.get("model", ""), parsed.get("part", "") or parsed.get("part_name", "")]
-            if x
-        ).strip() or fallback_normalized
-        normalized = _safe_slug(normalized_source) or fallback_normalized
+    parsed = None
+    parse_errors = []
 
-        inventory_query = _build_inventory_rag_query(parsed) or fallback_inventory
+    for model_name in [PART_QUERY_MODEL, PART_QUERY_FALLBACK_MODEL]:
+        try:
+            parsed = _parse_with_model(model_name)
+            break
+        except Exception as e:
+            parse_errors.append(f"{model_name}: {e}")
 
-        maruti_query = _safe_phrase(
-            " ".join(
-                x
-                for x in [
-                    parsed.get("model", ""),
-                    parsed.get("part_name", "") or parsed.get("part", ""),
-                    parsed.get("side", ""),
-                    parsed.get("type", ""),
-                ]
-                if x
-            )
-        ) or fallback_maruti
-        maruti_query = _safe_phrase(_remove_year_tokens(maruti_query))
-
+    if parsed is None:
         return {
-                    "parsed_query": parsed,
-                    "normalized_query": normalized,
-                    "inventory_query": inventory_query,
-                    "maruti_query": maruti_query,
-                }
-    except Exception:
-        return {
+            "parsed_query": _empty_parsed_query(),
             "normalized_query": fallback_normalized,
             "inventory_query": fallback_inventory,
             "maruti_query": fallback_maruti,
+            "parse_error": " | ".join(parse_errors) if parse_errors else "unknown parse error",
         }
+
+    normalized_source = " ".join(
+        x
+        for x in [parsed.get("model", ""), parsed.get("part", "") or parsed.get("part_name", "")]
+        if x
+    ).strip() or fallback_normalized
+    normalized = _safe_slug(normalized_source) or fallback_normalized
+
+    inventory_query = _build_inventory_rag_query(parsed) or fallback_inventory
+
+    maruti_query = _safe_phrase(
+        " ".join(
+            x
+            for x in [
+                parsed.get("model", ""),
+                parsed.get("part_name", "") or parsed.get("part", ""),
+                parsed.get("side", ""),
+                parsed.get("type", ""),
+            ]
+            if x
+        )
+    ) or fallback_maruti
+    maruti_query = _safe_phrase(_remove_year_tokens(maruti_query))
+
+    return {
+        "parsed_query": parsed,
+        "normalized_query": normalized,
+        "inventory_query": inventory_query,
+        "maruti_query": maruti_query,
+        "parse_error": "",
+    }
 
 
 def search_inventory(df: pd.DataFrame, query: str, top_n: int = 5) -> pd.DataFrame:
@@ -768,6 +796,7 @@ if st.button("Search"):
 
         raw_customer_query = (query or "").strip() or image_part_name
         query_bundle = build_actionable_search_query(raw_customer_query)
+        parse_error = query_bundle.get("parse_error", "")
         normalized_query = query_bundle.get("normalized_query", "")
         inventory_rag_query = query_bundle.get("inventory_query", "")
         maruti_search_query = query_bundle.get("maruti_query", "")
@@ -775,6 +804,7 @@ if st.button("Search"):
         if not inventory_rag_query and img_desc:
             fallback_image_query = _extract_part_name_from_image_desc(img_desc) or img_desc[:80]
             query_bundle = build_actionable_search_query(fallback_image_query)
+            parse_error = query_bundle.get("parse_error", "")
             normalized_query = query_bundle.get("normalized_query", "")
             inventory_rag_query = query_bundle.get("inventory_query", "")
             maruti_search_query = query_bundle.get("maruti_query", "")
@@ -783,6 +813,8 @@ if st.button("Search"):
             st.caption("Understanding messy customer language and converting to inventory-searchable item name")
             st.write("Parsed Query JSON:")
             st.json(query_bundle.get("parsed_query", {}))
+            if parse_error:
+                st.warning(f"Parsed query fallback used: {parse_error}")
             st.write(f"User Query -> {raw_customer_query or 'N/A'}")
             st.write(f"GPT Normalized Query -> {normalized_query or raw_customer_query or 'N/A'}")
             st.write(f"Inventory RAG Query -> {inventory_rag_query or 'N/A'}")
