@@ -15,7 +15,10 @@ from urllib.parse import quote
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # model selection
-PART_QUERY_MODEL = os.environ.get("PART_QUERY_MODEL", "gpt-5")
+SEARCH_JSON_NORMALIZATION_MODEL = os.environ.get(
+    "SEARCH_JSON_NORMALIZATION_MODEL",
+    os.environ.get("PART_QUERY_MODEL", "gpt-5"),
+)
 PART_QUERY_FALLBACK_MODEL = os.environ.get("PART_QUERY_FALLBACK_MODEL", "gpt-4.1")
 IMAGE_ANALYSIS_MODEL = os.environ.get("IMAGE_ANALYSIS_MODEL", "gpt-4.1-mini")
 MECHANIC_RESPONSE_MODEL = os.environ.get("MECHANIC_RESPONSE_MODEL", "gpt-4o-mini")
@@ -228,7 +231,7 @@ Customer Query:
     parsed = None
     parse_errors = []
 
-    for model_name in [PART_QUERY_MODEL, PART_QUERY_FALLBACK_MODEL]:
+    for model_name in [SEARCH_JSON_NORMALIZATION_MODEL, PART_QUERY_FALLBACK_MODEL]:
         try:
             parsed = _parse_with_model(model_name)
             break
@@ -476,67 +479,16 @@ IMPORTANT RULES
 ----------------------------------
 OUTPUT FORMAT
 ----------------------------------
-
-STOCK STATUS
-List relevant parts from the inventory:
-
-• Item Name
-• Part Code
-• Quantity Available
-• Sale Price (if available)
-
-Ignore inventory items that clearly do not match the request.
-
-BEST MATCH FOR CUSTOMER
-
-Part Name:
-Part Code:
-Quantity Available:
-
-Explain briefly why this is the best match for the customer's request.
+Return only the two sections below. Do not add any other sections, headings, bullets, or summaries.
 
 PART EXPLANATION
-
 Explain clearly:
-
-• What the part does
-• Where it is located in the vehicle
-• Which vehicle system it belongs to
-  (Engine / Brake / Electrical / Cooling / Exhaust / Suspension / Body)
+- what the part does
+- where it is located in the vehicle
+- which vehicle system it belongs to
 
 COMMON FAILURE SYMPTOMS
-
 Explain typical symptoms when this part fails so the salesman can confirm with the customer.
-
-Example symptoms:
-• Light not working
-• Brake noise
-• Engine overheating
-• Vehicle not starting
-
-RELATED PARTS TO SUGGEST
-
-Suggest parts that mechanics usually replace together with this part.
-
-For each suggested related part, add an availability tag:
-• Available in Shop (only if present in the inventory list above)
-• Not found in current inventory
-
-OEM / ORIGINAL PART NUMBER
-
-Provide OEM reference numbers if known.
-
-If uncertain, write:
-Possible OEM Reference.
-
-MECHANIC TIP FOR SALESMAN
-
-Teach the salesman useful knowledge such as:
-
-• Other names mechanics use for this part
-• How to visually identify it
-• Typical market price range
-• Popular brands mechanics prefer
 """
     try:
         r = client.chat.completions.create(
