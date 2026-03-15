@@ -410,6 +410,7 @@ def build_related_inventory_context(
 
 def analyze_image(uploaded_file) -> str:
     try:
+        uploaded_file.seek(0)
         img_bytes = uploaded_file.read()
         ext = imghdr.what(None, img_bytes) or "png"
         b64 = base64.b64encode(img_bytes).decode()
@@ -783,6 +784,8 @@ def _on_search_click():
 
 query = st.text_input("Enter your search query:", key="search_query_input")
 image_file = st.file_uploader("Upload spare part image", type=["png", "jpg", "jpeg"])
+if image_file is not None:
+    st.image(image_file, caption="Uploaded image thumbnail", width=240)
 
 if st.button("Search", on_click=_on_search_click):
     typed_query = st.session_state.get("last_typed_query", "").strip()
