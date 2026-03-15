@@ -24,6 +24,7 @@ IMAGE_ANALYSIS_MODEL = os.environ.get("IMAGE_ANALYSIS_MODEL", "gpt-4.1-mini")
 MECHANIC_RESPONSE_MODEL = os.environ.get("MECHANIC_RESPONSE_MODEL", "gpt-4o-mini")
 
 st.title("AI Spare Parts Sales Assistant")
+debug_mode = st.sidebar.checkbox("Enable debug", value=False)
 
 # --- inventory helpers -------------------------------------------------------
 @st.cache_data(show_spinner=False)
@@ -821,10 +822,12 @@ if st.button("Search", on_click=_on_search_click):
         img_desc = ""
         image_part_name = ""
         if image_file:
-            st.info("Analyzing image...")
+            if debug_mode:
+                st.info("Analyzing image...")
             img_desc = analyze_image(image_file)
-            st.write("**Image recognition output:**")
-            st.write(img_desc)
+            if debug_mode:
+                st.write("**Image recognition output:**")
+                st.write(img_desc)
             image_part_name = _extract_part_name_from_image_desc(img_desc)
 
         # If image exists, use image-derived part first and append typed text as extra narrowing context.
@@ -851,7 +854,7 @@ if st.button("Search", on_click=_on_search_click):
             inventory_rag_query = query_bundle.get("inventory_query", "")
             maruti_search_query = query_bundle.get("maruti_query", "")
 
-        if inventory_rag_query or normalized_query:
+        if debug_mode and (inventory_rag_query or normalized_query):
             st.caption("Understanding messy customer language and converting to inventory-searchable item name")
             st.write("Parsed Query JSON:")
             st.json(query_bundle.get("parsed_query", {}))
