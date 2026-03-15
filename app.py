@@ -25,6 +25,7 @@ MECHANIC_RESPONSE_MODEL = os.environ.get("MECHANIC_RESPONSE_MODEL", "gpt-4o-mini
 
 st.title("AI Spare Parts Sales Assistant")
 debug_mode = st.sidebar.checkbox("Enable debug", value=False)
+debug_window = st.expander("Debug Window", expanded=False) if debug_mode else None
 
 # --- inventory helpers -------------------------------------------------------
 @st.cache_data(show_spinner=False)
@@ -308,7 +309,7 @@ Customer Query:
     }
 
 
-def search_inventory(df: pd.DataFrame, query: str, top_n: int = 5) -> pd.DataFrame:
+def search_inventory(df: pd.DataFrame, query: str, top_n: int = 7) -> pd.DataFrame:
 
     if not query or df.empty:
         return pd.DataFrame()
@@ -808,6 +809,7 @@ def _on_search_click():
 
 query = st.text_input("Enter your search query:", key="search_query_input")
 image_file = st.file_uploader("Upload spare part image", type=["png", "jpg", "jpeg"])
+stock_results_limit = st.slider("Stock results to show", min_value=1, max_value=20, value=7, step=1)
 if image_file is not None:
     st.image(image_file, caption="Uploaded image thumbnail", width=240)
 
@@ -823,11 +825,13 @@ if st.button("Search", on_click=_on_search_click):
         image_part_name = ""
         if image_file:
             if debug_mode:
-                st.info("Analyzing image...")
+                with debug_window:
+                    st.info("Analyzing image...")
             img_desc = analyze_image(image_file)
             if debug_mode:
-                st.write("**Image recognition output:**")
-                st.write(img_desc)
+                with debug_window:
+                    st.write("**Image recognition output:**")
+                    st.write(img_desc)
             image_part_name = _extract_part_name_from_image_desc(img_desc)
 
         # If image exists, use image-derived part first and append typed text as extra narrowing context.
@@ -855,23 +859,24 @@ if st.button("Search", on_click=_on_search_click):
             maruti_search_query = query_bundle.get("maruti_query", "")
 
         if debug_mode and (inventory_rag_query or normalized_query):
-            st.caption("Understanding messy customer language and converting to inventory-searchable item name")
-            st.write("Parsed Query JSON:")
-            st.json(query_bundle.get("parsed_query", {}))
-            if parse_error:
-                st.warning(f"Parsed query fallback used: {parse_error}")
-            st.write(f"User Query -> {raw_customer_query or 'N/A'}")
-            st.write(f"GPT Normalized Query -> {normalized_query or raw_customer_query or 'N/A'}")
-            st.write(f"Inventory RAG Query -> {inventory_rag_query or 'N/A'}")
-            st.write(f"Maruti Website Query -> {maruti_search_query or 'N/A'}")
+            with debug_window:
+                st.caption("Understanding messy customer language and converting to inventory-searchable item name")
+                st.write("Parsed Query JSON:")
+                st.json(query_bundle.get("parsed_query", {}))
+                if parse_error:
+                    st.warning(f"Parsed query fallback used: {parse_error}")
+                st.write(f"User Query -> {raw_customer_query or 'N/A'}")
+                st.write(f"GPT Normalized Query -> {normalized_query or raw_customer_query or 'N/A'}")
+                st.write(f"Inventory RAG Query -> {inventory_rag_query or 'N/A'}")
+                st.write(f"Maruti Website Query -> {maruti_search_query or 'N/A'}")
 
         inventory_search_query = inventory_rag_query or normalized_query or raw_customer_query
 
-        matches = search_inventory(df, inventory_search_query)
+        matches = search_inventory(df, inventory_search_query, top_n=stock_results_limit)
         if matches.empty:
             st.write("No matching items found.")
         else:
-            display_df = matches[["item_name", "item_cd", "cat_name", "clsng_bal"]].head(5).copy()
+            display_df = matches[["item_name", "item_cd", "cat_name", "clsng_bal"]].head(stock_results_limit).copy()
             display_df.columns = ["Item Name", "Part Code", "Category", "Qty"]
             st.dataframe(display_df)
 
