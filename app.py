@@ -2,10 +2,11 @@ import os
 import base64
 import imghdr
 import re
+import json
 import streamlit as st
 import pandas as pd
 import requests
-from rapidfuzz import process, fuzz
+from rapidfuzz import fuzz
 from bs4 import BeautifulSoup
 from openai import OpenAI
 from urllib.parse import quote
@@ -14,32 +15,6 @@ from urllib.parse import quote
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 st.title("AI Spare Parts Sales Assistant")
-
-PART_SYNONYMS = {
-    "headlight": "head lamp",
-    "head light": "head lamp",
-    "head assembly": "head lamp assembly",
-    "front light": "head lamp",
-    "back light": "tail lamp",
-    "rear light": "tail lamp",
-    "side mirror": "orvm mirror",
-    "mirror": "orvm mirror",
-    "fan": "cooling fan",
-    "radiator fan": "radiator cooling fan",
-    "fog light": "fog lamp",
-    "foglamp": "fog lamp",
-    "head lamp glass": "head lamp lens",
-    "car light": "head lamp",
-}
-
-SEARCH_STOP_WORDS = {"for", "with", "the", "part", "car"}
-
-QUERY_NOISE_WORDS = {
-    "swift", "alto", "wagonr", "wagon", "baleno", "brezza", "ertiga", "dzire",
-    "celerio", "spresso", "ignis", "eeco", "ciaz", "fronx", "jimny",
-    "maruti", "suzuki", "genuine", "original", "model", "vehicle", "auto",
-    "assembly", "set", "piece",
-}
 
 # --- inventory helpers -------------------------------------------------------
 @st.cache_data(show_spinner=False)
@@ -67,126 +42,89 @@ def load_inventory(file) -> pd.DataFrame:
     return df
 
 
-def normalize_query(query: str) -> str:
-    q = re.sub(r"[^a-z0-9\s]", " ", (query or "").strip().lower())
-    q = re.sub(r"\s+", " ", q)
-    if not q:
-        return ""
+def _safe_slug(text: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9\s-]", " ", (text or "").strip().lower())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = cleaned.replace(" ", "-")
+    cleaned = re.sub(r"-+", "-", cleaned).strip("-")
+    return cleaned
 
-    # Replace phrase-level synonyms first (longer keys first).
-    for src in sorted(PART_SYNONYMS.keys(), key=len, reverse=True):
-        q = re.sub(rf"\b{re.escape(src)}\b", PART_SYNONYMS[src], q)
 
-    tokens = [t for t in q.split() if t]
-    cleaned_tokens = []
-    for tok in tokens:
-        # Drop likely year values and noisy numeric fragments.
-        if re.fullmatch(r"(19|20)\d{2}", tok):
-            continue
-        if tok.isdigit() and len(tok) <= 4:
-            continue
-        if tok in QUERY_NOISE_WORDS:
-            continue
-        cleaned_tokens.append(tok)
+def _safe_phrase(text: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9\s-]", " ", (text or "").strip().lower())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
 
-    # Keep order while removing duplicates.
-    seen = set()
-    deduped = []
-    for tok in cleaned_tokens:
-        if tok not in seen:
-            seen.add(tok)
-            deduped.append(tok)
 
-    q = " ".join(deduped).strip()
+def _remove_year_tokens(text: str) -> str:
+    tokens = [t for t in re.split(r"\W+", (text or "").lower()) if t]
+    tokens = [t for t in tokens if not re.fullmatch(r"(19|20)\d{2}", t)]
+    return " ".join(tokens).strip()
 
-    # Final pass to remap after token cleanup.
-    for src in sorted(PART_SYNONYMS.keys(), key=len, reverse=True):
-        q = re.sub(rf"\b{re.escape(src)}\b", PART_SYNONYMS[src], q)
 
-    return re.sub(r"\s+", " ", q).strip()
-
-def identify_catalogue_part(query: str) -> str:
-    """
-    Use GPT to convert messy customer query
-    into official spare parts catalogue name
-    """
-
-    prompt = f"""
-You are an automotive spare parts catalogue expert.
-
-Convert the customer request into the official spare parts catalogue part name.
-
-Rules:
-- Return ONLY the part name used in spare parts catalogues
-- Do not include vehicle model
-- Do not include year
-- Maximum 3 words
-- No explanation
-
-Examples:
-fog light -> fog lamp
-front light -> head lamp
-rear light -> tail lamp
-side mirror -> orvm mirror
-front shock -> shock absorber
-radiator fan -> cooling fan
-
-Customer query:
-{query}
-"""
-
-    try:
-        r = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=10
-        )
-
-        part_name = r.choices[0].message.content.strip().lower()
-
-        part_name = re.sub(r"[^a-z0-9\s]", "", part_name)
-
-        return part_name
-
-    except Exception:
-        return query
-
-def build_actionable_search_query(normalized_query: str) -> str:
-    """Use GPT to create a compact, inventory-searchable query string.
-
-    This function only rewrites query text; inventory retrieval and ranking stay deterministic.
-    """
-    cleaned = re.sub(r"\s+", " ", (normalized_query or "").strip().lower())
+def build_actionable_search_query(user_query: str) -> dict:
+    """Use GPT once to normalize and derive both stock and website search queries."""
+    cleaned = re.sub(r"\s+", " ", (user_query or "").strip().lower())
     if not cleaned:
-        return ""
+        return {
+            "normalized_query": "",
+            "inventory_query": "",
+            "maruti_query": "",
+        }
 
     prompt = f"""
-You are a spare-parts search query optimizer for inventory retrieval.
+You are an automotive spare-parts search normalizer.
 
-Input is already normalized. Produce one actionable search query string for stock lookup.
+Given a raw user search, return JSON with three strings.
+
+Output format (strict JSON only):
+{{
+  "normalized_query": "kebab-case normalized string like ertiga-engine-cooler",
+  "inventory_query": "query for stock RAG including model + part name + part code intent",
+  "maruti_query": "query for Maruti website with model + part, but NO year"
+}}
 
 Rules:
-- Return only one short query phrase (3 to 8 words).
-- Include common catalog terms and close synonyms when useful.
-- Keep brand/model noise out unless critical for part identity.
-- No bullets, no explanations, no extra formatting.
+- Use only lowercase letters, digits, spaces, and hyphen in values.
+- "normalized_query" must be kebab-case.
+- "inventory_query" must prioritize stock retrieval terms and include part-code intent.
+- "maruti_query" must NOT include any year token.
+- Return only valid JSON. No markdown, no explanation.
 
-Input query: {cleaned}
+User search: {cleaned}
 """
+
+    fallback_normalized = _safe_slug(cleaned)
+    fallback_inventory = _safe_phrase(f"{_remove_year_tokens(cleaned)} part code")
+    fallback_maruti = _safe_phrase(_remove_year_tokens(cleaned))
+
     try:
         r = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=24,
             temperature=0,
+            max_tokens=120,
+            response_format={"type": "json_object"},
         )
-        actionable = (r.choices[0].message.content or "").strip().lower()
-        actionable = re.sub(r"[^a-z0-9\s]", " ", actionable)
-        actionable = re.sub(r"\s+", " ", actionable).strip()
-        return actionable or cleaned
+
+        payload = json.loads((r.choices[0].message.content or "").strip())
+
+        normalized = _safe_slug(str(payload.get("normalized_query", ""))) or fallback_normalized
+        inventory_query = _safe_phrase(str(payload.get("inventory_query", ""))) or fallback_inventory
+        maruti_query = _safe_phrase(str(payload.get("maruti_query", ""))) or fallback_maruti
+        maruti_query = _safe_phrase(_remove_year_tokens(maruti_query))
+
+        return {
+            "normalized_query": normalized,
+            "inventory_query": inventory_query,
+            "maruti_query": maruti_query,
+        }
     except Exception:
-        return cleaned
+        return {
+            "normalized_query": fallback_normalized,
+            "inventory_query": fallback_inventory,
+            "maruti_query": fallback_maruti,
+        }
 
 
 def search_inventory(df: pd.DataFrame, query: str, top_n: int = 5) -> pd.DataFrame:
@@ -708,25 +646,28 @@ if st.button("Search"):
             image_part_name = _extract_part_name_from_image_desc(img_desc)
 
         raw_customer_query = (query or "").strip() or image_part_name
-        normalized_query = normalize_query(raw_customer_query)
+        query_bundle = build_actionable_search_query(raw_customer_query)
+        normalized_query = query_bundle.get("normalized_query", "")
+        inventory_rag_query = query_bundle.get("inventory_query", "")
+        maruti_search_query = query_bundle.get("maruti_query", "")
 
-        # GPT interprets the catalogue part
-        catalogue_part = identify_catalogue_part(normalized_query)
+        if not inventory_rag_query and img_desc:
+            fallback_image_query = _extract_part_name_from_image_desc(img_desc) or img_desc[:80]
+            query_bundle = build_actionable_search_query(fallback_image_query)
+            normalized_query = query_bundle.get("normalized_query", "")
+            inventory_rag_query = query_bundle.get("inventory_query", "")
+            maruti_search_query = query_bundle.get("maruti_query", "")
 
-        # Final search query used for inventory lookup
-        deterministic_search_query = catalogue_part or normalized_query
-
-        if not deterministic_search_query and img_desc:
-            deterministic_search_query = normalize_query(_extract_part_name_from_image_desc(img_desc) or img_desc[:80])
-
-        if deterministic_search_query:
+        if inventory_rag_query or normalized_query:
             st.caption("Understanding messy customer language and converting to inventory-searchable item name")
             st.write(f"User Query -> {raw_customer_query or 'N/A'}")
-            st.write(f"Normalized Query -> {normalized_query or raw_customer_query or 'N/A'}")
-            st.write(f"Catalogue Part Identified (GPT) -> {catalogue_part}")
-            st.caption(f'System search query: "{deterministic_search_query}"')
+            st.write(f"GPT Normalized Query -> {normalized_query or raw_customer_query or 'N/A'}")
+            st.write(f"Inventory RAG Query -> {inventory_rag_query or 'N/A'}")
+            st.write(f"Maruti Website Query -> {maruti_search_query or 'N/A'}")
 
-        matches = search_inventory(df, deterministic_search_query)
+        inventory_search_query = inventory_rag_query or normalized_query or raw_customer_query
+
+        matches = search_inventory(df, inventory_search_query)
         if matches.empty:
             st.write("No matching items found.")
         else:
@@ -738,13 +679,13 @@ if st.button("Search"):
             explanation_context_df = build_related_inventory_context(
                 df=df,
                 primary_matches=matches,
-                user_query=deterministic_search_query,
+                user_query=normalized_query or inventory_search_query,
                 max_items=15,
             )
             matches_text = rows_to_text(explanation_context_df)
             
             # Generate comprehensive explanation (includes Malayalam)
-            explanation_input = deterministic_search_query or query or image_part_name or "image lookup"
+            explanation_input = normalized_query or inventory_search_query or query or image_part_name or "image lookup"
             explanation = mechanic_explanation_english(matches_text, explanation_input)
             
             # Display explanation as a styled webpage section
@@ -752,11 +693,13 @@ if st.button("Search"):
             st.markdown(explanation, unsafe_allow_html=True)
 
         # Maruti Genuine Parts direct search using identified part name/query.
-        maruti_query = (deterministic_search_query or "").strip()
+        maruti_query = (maruti_search_query or "").strip()
+        if not maruti_query:
+            maruti_query = _remove_year_tokens(inventory_search_query)
         if not maruti_query and image_part_name:
-            maruti_query = image_part_name
+            maruti_query = _remove_year_tokens(image_part_name)
         if not maruti_query and not matches.empty:
-            maruti_query = str(matches.iloc[0].get("item_name", "")).strip()
+            maruti_query = _remove_year_tokens(str(matches.iloc[0].get("item_name", "")).strip())
 
         st.subheader("Maruti Genuine Parts Direct Search")
         maruti_url, maruti_df, maruti_msg = maruti_direct_search(maruti_query)
