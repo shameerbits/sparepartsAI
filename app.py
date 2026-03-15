@@ -775,13 +775,17 @@ elif default_df is not None:
 else:
     st.warning("⚠️  No inventory loaded. Please upload a stock file or ensure stock.xlsx exists in the directory.")
 
-query = st.text_input("Enter your search query:")
+query = st.text_input("Enter your search query:", key="search_query_input")
 image_file = st.file_uploader("Upload spare part image", type=["png", "jpg", "jpeg"])
 
 if st.button("Search"):
+    typed_query = (query or "").strip()
+    # Clear input after each search click to avoid stale text being reused.
+    st.session_state["search_query_input"] = ""
+
     if df is None:
         st.warning("Upload inventory first.")
-    elif not query and not image_file:
+    elif not typed_query and not image_file:
         st.warning("Enter a text query or upload an image.")
     else:
         img_desc = ""
@@ -793,7 +797,14 @@ if st.button("Search"):
             st.write(img_desc)
             image_part_name = _extract_part_name_from_image_desc(img_desc)
 
-        raw_customer_query = (query or "").strip() or image_part_name
+        # If image exists, use image-derived part first and append typed text as extra narrowing context.
+        if image_part_name and typed_query:
+            raw_customer_query = f"{image_part_name} {typed_query}".strip()
+        elif image_part_name:
+            raw_customer_query = image_part_name
+        else:
+            raw_customer_query = typed_query
+
         query_bundle = build_actionable_search_query(raw_customer_query)
         parse_error = query_bundle.get("parse_error", "")
         normalized_query = query_bundle.get("normalized_query", "")
@@ -802,6 +813,8 @@ if st.button("Search"):
 
         if not inventory_rag_query and img_desc:
             fallback_image_query = _extract_part_name_from_image_desc(img_desc) or img_desc[:80]
+            if typed_query:
+                fallback_image_query = f"{fallback_image_query} {typed_query}".strip()
             query_bundle = build_actionable_search_query(fallback_image_query)
             parse_error = query_bundle.get("parse_error", "")
             normalized_query = query_bundle.get("normalized_query", "")
@@ -839,7 +852,7 @@ if st.button("Search"):
             matches_text = rows_to_text(explanation_context_df)
             
             # Generate comprehensive explanation (includes Malayalam)
-            explanation_input = inventory_rag_query or normalized_query or inventory_search_query or query or image_part_name or "image lookup"
+            explanation_input = inventory_rag_query or normalized_query or inventory_search_query or typed_query or image_part_name or "image lookup"
             explanation = mechanic_explanation_english(matches_text, explanation_input)
             
             # Display explanation as a styled webpage section
