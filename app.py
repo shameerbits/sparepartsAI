@@ -775,13 +775,17 @@ elif default_df is not None:
 else:
     st.warning("⚠️  No inventory loaded. Please upload a stock file or ensure stock.xlsx exists in the directory.")
 
+
+def _on_search_click():
+    # Capture current input for this search, then clear widget value safely via callback.
+    st.session_state["last_typed_query"] = st.session_state.get("search_query_input", "").strip()
+    st.session_state["search_query_input"] = ""
+
 query = st.text_input("Enter your search query:", key="search_query_input")
 image_file = st.file_uploader("Upload spare part image", type=["png", "jpg", "jpeg"])
 
-if st.button("Search"):
-    typed_query = (query or "").strip()
-    # Clear input after each search click to avoid stale text being reused.
-    st.session_state["search_query_input"] = ""
+if st.button("Search", on_click=_on_search_click):
+    typed_query = st.session_state.get("last_typed_query", "").strip()
 
     if df is None:
         st.warning("Upload inventory first.")
