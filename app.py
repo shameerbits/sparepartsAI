@@ -65,6 +65,23 @@ def _safe_phrase(text: str) -> str:
     return cleaned
 
 
+CATALOG_TERM_MAP = {
+    "exterior": "outer",
+    "interior": "inner",
+    "outside": "outer",
+    "inside": "inner",
+}
+
+
+def _normalize_catalog_phrase(text: str) -> str:
+    normalized = _safe_phrase(text)
+    if not normalized:
+        return ""
+    for src, dst in sorted(CATALOG_TERM_MAP.items(), key=lambda x: len(x[0]), reverse=True):
+        normalized = re.sub(rf"\b{re.escape(src)}\b", dst, normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
 def _remove_year_tokens(text: str) -> str:
     tokens = [t for t in re.split(r"\W+", (text or "").lower()) if t]
     tokens = [t for t in tokens if not re.fullmatch(r"(19|20)\d{2}", t)]
@@ -148,6 +165,12 @@ part: generic part name (example: fog lamp, head lamp, bumper)
 category: vehicle system category (examples: lighting, body, engine, electrical, cooling)
 hsn: infer HSN code from mapped part/category even when not explicitly mentioned
 
+Catalogue naming preference rules:
+- Use standard Indian spare-parts wording.
+- Prefer "outer" over "exterior".
+- Prefer "inner" over "interior".
+
+
 Inference rules:
 - Prefer confident inference over leaving blank for part_number and hsn.
 - If multiple plausible part numbers exist and confidence is low, choose the most common reference format for that part/model.
@@ -224,11 +247,11 @@ Customer Query:
         payload = json.loads((r.choices[0].message.content or "").strip())
         return {
             "model": _safe_phrase(str(payload.get("model", ""))),
-            "part_name": _safe_phrase(str(payload.get("part_name", ""))),
+            "part_name": _normalize_catalog_phrase(str(payload.get("part_name", ""))),
             "side": _safe_phrase(str(payload.get("side", ""))),
             "type": _safe_phrase(str(payload.get("type", ""))),
             "part_number": _safe_phrase(str(payload.get("part_number", ""))),
-            "part": _safe_phrase(str(payload.get("part", ""))),
+            "part": _normalize_catalog_phrase(str(payload.get("part", ""))),
             "category": _safe_phrase(str(payload.get("category", ""))),
             "hsn": _safe_phrase(str(payload.get("hsn", ""))),
         }
