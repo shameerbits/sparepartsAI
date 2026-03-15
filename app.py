@@ -833,13 +833,13 @@ if st.button("Search"):
             explanation_context_df = build_related_inventory_context(
                 df=df,
                 primary_matches=matches,
-                user_query=normalized_query or inventory_search_query,
+                user_query=inventory_rag_query or normalized_query or inventory_search_query,
                 max_items=15,
             )
             matches_text = rows_to_text(explanation_context_df)
             
             # Generate comprehensive explanation (includes Malayalam)
-            explanation_input = normalized_query or inventory_search_query or query or image_part_name or "image lookup"
+            explanation_input = inventory_rag_query or normalized_query or inventory_search_query or query or image_part_name or "image lookup"
             explanation = mechanic_explanation_english(matches_text, explanation_input)
             
             # Display explanation as a styled webpage section
