@@ -143,10 +143,15 @@ model: vehicle model name (example: swift, baleno, alto)
 part_name: official catalogue style name if possible (example: fog lamp assembly, head lamp assembly)
 side: LH or RH if left or right is mentioned
 type: part version like type1, type2, type3 if mentioned
-part_number: only if explicitly mentioned in the query
+part_number: infer likely OEM/reference part number from model + part context even if not explicitly mentioned
 part: generic part name (example: fog lamp, head lamp, bumper)
 category: vehicle system category (examples: lighting, body, engine, electrical, cooling)
-hsn: HSN code if the part clearly belongs to a known category
+hsn: infer HSN code from mapped part/category even when not explicitly mentioned
+
+Inference rules:
+- Prefer confident inference over leaving blank for part_number and hsn.
+- If multiple plausible part numbers exist and confidence is low, choose the most common reference format for that part/model.
+- Use empty string only when no credible inference is possible.
 
 HSN mapping rules:
 head lamp -> 85122010
