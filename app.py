@@ -235,10 +235,11 @@ Customer Query:
         maruti_query = _safe_phrase(_remove_year_tokens(maruti_query))
 
         return {
-            "normalized_query": normalized,
-            "inventory_query": inventory_query,
-            "maruti_query": maruti_query,
-        }
+                    "parsed_query": parsed,
+                    "normalized_query": normalized,
+                    "inventory_query": inventory_query,
+                    "maruti_query": maruti_query,
+                }
     except Exception:
         return {
             "normalized_query": fallback_normalized,
@@ -780,6 +781,8 @@ if st.button("Search"):
 
         if inventory_rag_query or normalized_query:
             st.caption("Understanding messy customer language and converting to inventory-searchable item name")
+            st.write("Parsed Query JSON:")
+            st.json(query_bundle.get("parsed_query", {}))
             st.write(f"User Query -> {raw_customer_query or 'N/A'}")
             st.write(f"GPT Normalized Query -> {normalized_query or raw_customer_query or 'N/A'}")
             st.write(f"Inventory RAG Query -> {inventory_rag_query or 'N/A'}")
